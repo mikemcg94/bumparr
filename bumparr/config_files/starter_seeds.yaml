@@ -1,0 +1,53 @@
+# Bumparr starter seeds — SEARCH TERMS, not media.
+#
+# Bumparr ships no video, audio, or images. What it ships is a set of good
+# opening moves: queries known to return material that works as interstitial
+# footage, so a fresh install has somewhere to start instead of an empty pool
+# and a blinking cursor.
+#
+# Nothing here downloads until you ask it to. Running these hits the stock APIs
+# with YOUR key and pulls into YOUR library. Delete, edit, or ignore the lot —
+# it is a suggestion list, and the ask-bar takes anything you type.
+#
+# Each entry:
+#   query    what to search for (the same text you would type in the ask-bar)
+#   count    how many clips to pull
+#   why      what makes this work as a bumper (kept honest, not marketing)
+#
+# Requires PEXELS_API_KEY and/or PIXABAY_API_KEY — both are free, self-signup,
+# and yours. Entries that need no key are marked `source: archive`.
+
+seeds:
+  # --- Machine-room ambience -------------------------------------------------
+  # Blinking-light footage is the workhorse of this whole format: abstract
+  # enough to sit under anything, busy enough to hold an eye for ten seconds,
+  # and it never dates.
+  - {query: "server rack blinking lights", count: 6, why: "close-up indicator LEDs; reads as 'the station is thinking'"}
+  - {query: "network switch data center", count: 4, why: "wider machine-room shots, good for longer gaps"}
+  - {query: "fiber optic cables", count: 3, why: "colour and motion with no subject to follow"}
+
+  # --- Weather ---------------------------------------------------------------
+  # Storms carry their own drama and need no explanation, which is exactly what
+  # an interstitial wants. Timelapse clouds are the calm counterweight.
+  - {query: "lightning storm", count: 6, why: "self-contained spectacle; strong at any length"}
+  - {query: "thunderstorm clouds", count: 5, why: "moody wide shots that work under text"}
+  - {query: "storm clouds timelapse", count: 5, why: "constant motion, no focal point to miss"}
+  - {query: "rain on window", count: 4, why: "quiet and close; a breather between louder clips"}
+  - {query: "snow falling", count: 3, why: "seasonal calm, reads well muted"}
+
+  # --- Ambient motion --------------------------------------------------------
+  - {query: "city skyline night timelapse", count: 4, why: "lights and traffic streaks; classic station filler"}
+  - {query: "neon signs night", count: 4, why: "saturated colour, strong under a brand mark"}
+  - {query: "aquarium fish tank", count: 4, why: "hypnotic and slow; good for long gaps"}
+  - {query: "campfire close up", count: 3, why: "warm motion that loops without a seam"}
+
+  # --- Public-domain film, no API key needed ---------------------------------
+  # These come from the Internet Archive, which is free to query. Fetch politely:
+  # serial, spaced out, never a burst — a parallel-download spree will get your
+  # WAN throttled, and it takes hours to clear.
+  - {query: "vintage television station identification", count: 4, source: archive,
+     why: "real broadcast idents; the thing every other bumper is imitating"}
+  - {query: "1950s public service announcement", count: 3, source: archive,
+     why: "period tone that pairs well with generated PSA cards"}
+  - {query: "test pattern", count: 2, source: archive,
+     why: "the universal 'we are between things' image"}

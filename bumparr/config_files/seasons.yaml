@@ -1,0 +1,83 @@
+# Seasonal windows — when a category is allowed on air.
+#
+# A turkey clip in April is jarring in a way no amount of good footage fixes.
+# These windows keep holiday material out of rotation until it is wanted, then
+# ease it in rather than flipping a switch on one morning.
+#
+# Dates are MM-DD and the year wraps correctly, so a window like 12-20 -> 01-02
+# spans New Year without special handling.
+#
+#   lead_in    days before `start` over which weight ramps from nothing to full.
+#              Real channels tease a holiday for weeks; a hard edge feels wrong.
+#   tail       days after `end` to fade out. Usually short — nobody wants a
+#              pumpkin on November 2nd.
+#   peak       optional MM-DD; weight is boosted approaching this and drops
+#              sharply after, which is how the day itself should feel.
+#   off_weight multiplier applied outside the window. 0 removes the category
+#              entirely; a small value keeps it as a rare curiosity.
+#   windows    optional LIST of windows for a category that owns more than one
+#              date (fireworks belong to New Year and Independence Day alike).
+#              Each is evaluated and the strongest wins. Keys set at the top
+#              level apply to every window unless overridden inside one.
+#   in_season  multiplier while the window is open. Defaults to 2.0 — above 1.0
+#              deliberately, so October feels like October instead of merely
+#              permitting pumpkins. Ramps rise to this, not to 1.0.
+#   peak_boost extra lift in the fortnight around `peak`. Default 1.5, so the
+#              day itself runs about 3.5x an ordinary clip.
+#
+# THESE ARE SUGGESTIONS, and Northern-Hemisphere / US-centric ones at that.
+# Edit freely: your seasons, your holidays, your channel. A category with no
+# entry here is never gated and plays year-round, which is the default.
+
+seasons:
+  halloween:
+    start: "09-25"
+    end: "10-31"
+    peak: "10-31"
+    lead_in: 10
+    tail: 1
+    off_weight: 0.0
+
+  thanksgiving:          # US date; Canadian Thanksgiving is October
+    start: "11-10"
+    end: "11-30"
+    peak: "11-26"
+    lead_in: 7
+    tail: 2
+    off_weight: 0.0
+
+  christmas:
+    start: "12-01"
+    end: "12-26"
+    peak: "12-25"
+    lead_in: 14
+    tail: 2
+    off_weight: 0.0
+
+  new_year:
+    start: "12-28"
+    end: "01-02"         # wraps the year correctly
+    peak: "01-01"
+    lead_in: 3
+    tail: 1
+    off_weight: 0.0
+
+  # Fireworks own TWO dates, not one, and are never off the air. They read as
+  # generic celebration all year, so the off-season weight is a normal 1.0 —
+  # they simply surge around the days that belong to them. This is what
+  # `windows` is for: the strongest matching window wins.
+  fireworks:
+    off_weight: 1.0        # normal year-round, never gated off
+    in_season: 2.5
+    peak_boost: 2.0        # ~4.5x on the day itself
+    windows:
+      - {start: "06-28", end: "07-06", peak: "07-04", lead_in: 7, tail: 2}
+      - {start: "12-29", end: "01-02", peak: "01-01", lead_in: 4, tail: 1}
+
+  # Summer material: still fine in winter as escapism, just less prominent.
+  beach:
+    start: "05-15"
+    end: "09-15"
+    lead_in: 14
+    tail: 14
+    off_weight: 0.5

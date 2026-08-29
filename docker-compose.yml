@@ -1,0 +1,33 @@
+# Standalone Bumparr — runs next to your *arr stack on its own port.
+# Point the volumes at your storage; edit config_files/ for your cams & fetch queue.
+services:
+  bumparr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bumparr
+    ports:
+      - "${PORT:-8780}:8780"
+    environment:
+      - ASSET_ROOT=/assets
+      - DB=/data/bumparr.db
+      - BRAND=${BRAND:-Bumparr}
+      # Set behind a reverse proxy so emitted M3U / bumper URLs are absolute.
+      - PUBLIC_URL=${PUBLIC_URL:-}
+      # Optional local model for the model-generated card kinds; blank = skip.
+      # Grounded, procedural, and starter cards work with no model.
+      - LLM_BASE=${LLM_BASE:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_DISABLE_THINKING=${LLM_DISABLE_THINKING:-}
+      # Stock-footage keys for the shipped starter seeds (free self-signup).
+      - PEXELS_API_KEY=${PEXELS_API_KEY:-}
+      - PIXABAY_API_KEY=${PIXABAY_API_KEY:-}
+      # Timezone for the clock card; containers are UTC without it.
+      - TZ=${TZ:-UTC}
+    volumes:
+      # Your bumper library (rw so live-cam snippets + fetched PD content can land).
+      - ${ASSETS:-./assets}:/assets:rw
+      - ${DATA:-./data}:/data
+      # Live edits without rebuild (optional; safe to remove for a pinned deploy).
+      - ./bumparr:/app/bumparr:ro
+    restart: unless-stopped

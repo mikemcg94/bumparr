@@ -1,0 +1,16 @@
+# Self-healing archive.org fetch queue. Items retry each pass until they land
+# (survives temporary archive.org storage-node outages). Add {id, category}.
+# Downloaded items are tracked in data/fetch_done.json and skipped thereafter.
+items:
+  # Fleischer / classic PD cartoons blocked by a down archive node 2026-08-17
+  - {id: bb_minnie_the_moocher, category: cartoons}        # Fleischer 1932, PD
+  - {id: bb_old_man_of_the_mountain, category: cartoons}   # Fleischer 1933 Cab Calloway, PD
+  - {id: FLIP_FROG-FIDDLESTICKS, category: cartoons}       # Ub Iwerks 1930
+  # Other archive-flaky items from earlier batches
+  - {id: DontBeaS1947, category: military}                 # Don't Be a Sucker 1947, PD
+  - {id: Automoti1940, category: automotive}               # Automotive Service 1940, PD
+  - {id: SpotNews1937, category: automotive}
+  - {id: PrivateL1947, category: trippy}                   # Private Life of a Cat, PD
+  # fun_animation (fractals/kaleidoscope) — Scott Draves electric sheep, CC
+  - {id: electricsheep-flock-244-32500-2, category: fun_animation}
+  - {id: electricsheep-flock-248-27500-6, category: fun_animation}

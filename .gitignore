@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local config & secrets
+.env
+
+# Runtime data — the bumper library, DB, and caches are the deployer's, not the repo's
+data/
+assets/
+*.db
+*.db-wal
+*.db-shm
+.cache/
+
+# OS
+.DS_Store

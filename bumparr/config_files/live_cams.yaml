@@ -1,0 +1,51 @@
+# Live cameras — user-owned config. Point this at whatever public live
+# feeds you want (your local DOT traffic cams, harbors, whatever). Each entry:
+#   title:  shown label
+#   url:    a direct HLS (.m3u8) URL
+#   kind:   webcam (default)
+#   region: freeform tag (e.g. your city/state) for your own organization
+#   direct: true if the stream sends CORS headers (plays in-browser directly);
+#           false routes it through the same-origin proxy.
+#   weight: relative scheduler weight (local cams can be weighted higher)
+#
+# TRUE LIVE requires OPEN HLS. State DOT 511 systems are the best source — many
+# publish direct, no-auth, CORS-open .m3u8. YouTube-backed cams do NOT work as
+# true-live (tokenized, no CORS) — those are handled separately as refreshing
+# snapshot clips (tools/capture_windows.py).
+#
+# Seeded here with verified-open Louisiana DOT cams as a working example. Replace
+# with your own local feeds. (Some DOT systems need a free API key — see README.)
+
+# --- LIVE cams: open, direct HLS (genuinely real-time) ---
+cams:
+  - {title: "Live: Louisiana DOT 1", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-002.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+  - {title: "Live: Louisiana DOT 2", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-005.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+  - {title: "Live: Louisiana DOT 3", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-009.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+  - {title: "Live: Louisiana DOT 4", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-013.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+  - {title: "Live: Louisiana DOT 5", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-017.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+  - {title: "Live: Louisiana DOT 6", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-021.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+
+# --- SNAPSHOT cams: YouTube-backed (can't be true-live), captured as fresh ~60-95s
+# clips on a refresh cycle. `query` is a YouTube search resolved to whatever is
+# currently live. Add your LOCAL cams here (location-bound). ---
+snapshot_cams:
+  # calm / scenic
+  - {slug: jackson-hole, query: "Jackson Hole Wyoming Town Square live cam"}
+  - {slug: venice, query: "Venice Italy Grand Canal live cam"}
+  - {slug: waikiki, query: "Waikiki Beach Honolulu live cam"}
+  # nature / wildlife
+  - {slug: africa-waterhole, query: "explore.org African watering hole live cam"}
+  - {slug: monterey-jellies, query: "Monterey Bay Aquarium jelly cam live"}
+  - {slug: bird-feeder, query: "Cornell Lab bird feeder live cam"}
+  # urban / transit
+  - {slug: times-square, query: "Times Square NYC live cam EarthCam"}
+  - {slug: shibuya, query: "Shibuya Crossing Tokyo live cam"}
+  - {slug: abbey-road, query: "Abbey Road crossing London live cam"}
+  # weird / liminal
+  - {slug: aurora, query: "Northern Lights aurora live cam"}
+  - {slug: old-faithful, query: "Old Faithful geyser live cam"}
+  # your own local cams — many DOT feeds are snapshot/keyed, so YouTube-live
+  # searches for your area work well here.
+  # space / ISS
+  - {slug: iss-earth, query: "ISS live stream NASA earth from space"}
+  - {slug: nasa-live, query: "NASA live ISS HD earth views"}

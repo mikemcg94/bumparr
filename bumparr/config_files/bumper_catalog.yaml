@@ -1,0 +1,105 @@
+# Bumper Catalog
+# Master plan for bumper content.
+#
+# The point of this file: variety comes from DIFFERENT PRODUCTION MECHANISMS, not just
+# "more clips." Each concept is tagged by how it is actually produced and how ready it is.
+#
+# status:
+#   generate        - produced locally (model or render), NO external fetch -> buildable now
+#   fetch           - clean, correctly-licensed downloadable/stream source reachable now
+#   data-api        - needs a (mostly free / no-key) data API
+#   key             - needs an API key we don't have yet
+#   deferred-archive- needs the Internet Archive (our IP is throttled; do politely later)
+#   deferred-jelly  - needs the Jellyfin library (the "shows" half, later)
+#   modifier        - a scheduler weighting overlay, NOT a standalone content type
+#
+# treatment: a presentation wrapper applied over a base asset. Several concepts are
+#   really (base asset) x (treatment): reveal-late, slow-zoom, delayed-answer, progressive.
+
+treatments:
+  - reveal-late        # hide the key detail (location/answer/meaning) until the final seconds
+  - slow-zoom          # start extremely cropped, slowly widen to reveal
+  - delayed-answer     # question/clue up, answer after a beat
+  - progressive        # clues that get progressively easier
+
+# Seasonal/holiday are NOT content types - they are time-based weight overlays on everything else.
+modifiers:
+  - name: Seasonal Flavor
+    kind: seasonal
+    notes: lightly boost spring rain/flowers, summer beaches, autumn leaves, winter snow in season
+  - name: Holiday Flavor
+    kind: holiday
+    notes: temporary boosts - July 4 fireworks, Halloween weirdness, Christmas lights, NYE, Thanksgiving
+
+# ---- LIVE STREAMS ("windows") -------------------------------------------------
+streams:
+  - {name: Live Windows,     type: stream, status: fetch,    treatment: [],            sources: [public-webcam-directories, youtube-live, dot-traffic-cams, windy-webcams], license: public-feeds-only, notes: "streets/traffic/harbors/airports/trains/beaches/wildlife/underwater/observatories/ISS"}
+  - {name: Meanwhile,        type: stream, status: fetch,    treatment: [reveal-late], sources: [public-webcam-directories, youtube-live], license: public-feeds-only, notes: "unexplained live cam; location revealed near the end"}
+  - {name: Nature Roulette,  type: stream, status: fetch,    treatment: [],            sources: [explore-org, youtube-live, zoo-aquarium-cams], license: public-feeds-only, notes: "bird feeders/nests/bears/aquariums/reefs/zoos"}
+  - {name: Machine Cam,      type: stream, status: fetch,    treatment: [],            sources: [youtube-live, public-webcam-directories, wikimedia], license: mixed, notes: "factories/CNC/3D printers/rail yards/ship locks/drawbridges/telescopes; mix of live + recorded"}
+  - {name: Microscope,       type: video,  status: fetch,    treatment: [],            sources: [wikimedia, nih-bioimage, youtube-cc], license: cc, notes: "microscopy footage dropped in with little explanation"}
+  - {name: Radio Scan,       type: stream, status: fetch,    treatment: [],            sources: [public-radio-streams, radio-garden-public], license: public-streams-only, notes: "legal live/public audio snippet + simple visual"}
+
+# ---- DOWNLOADED VIDEO ---------------------------------------------------------
+video:
+  - {name: NASA/Space,          type: video, status: fetch,            sources: [nasa-images-api], license: public-domain, notes: "DONE (7 clips); Earth/launches/auroras/nebulae/spacecraft"}
+  - {name: Ambient Television,  type: video, status: fetch,            sources: [nasa, wikimedia, pixabay], license: cc-pd, notes: "rain/fireplaces/aquariums/clouds/snow/lava lamps/records spinning"}
+  - {name: Very Slow Television, type: video, status: fetch,           sources: [wikimedia, pd-collections], license: cc-pd, notes: "long mundane scenes where nothing must happen; can run several minutes"}
+  - {name: Random Drone/Aerial, type: video, status: fetch,            sources: [wikimedia, pixabay, coverr], license: cc-pd, notes: "landscapes/cities/coastlines/landmarks from above"}
+  - {name: Satellite Window,    type: video, status: data-api,         sources: [noaa-goes, nasa-worldview], license: public-domain, notes: "recent satellite imagery of clouds/storms/auroras/oceans"}
+  - {name: Micro Music Videos,  type: video, status: key,              sources: [free-music-archive, cc-mixter, visualizer-generated], license: cc, notes: "short legal music + visualizer/archive footage"}
+  - {name: Archive Clips,       type: video, status: deferred-archive, sources: [internet-archive-prelinger], license: public-domain, notes: "short vintage educational/industrial/gov/safety/training film segments"}
+  - {name: Vintage Ads,         type: video, status: deferred-archive, sources: [internet-archive], license: public-domain, notes: "legally reusable historical commercials/promo films"}
+  - {name: Public-Domain Shorts, type: video, status: deferred-archive, sources: [internet-archive], license: public-domain, notes: "occasionally let a great archive/cartoon/educational film run long or in full"}
+  - {name: Found Instructions,  type: video, status: deferred-archive, sources: [internet-archive, pd-manuals], license: public-domain, notes: "contextless diagrams/clips from old manuals + instructional films"}
+  - {name: GM Training Films,   type: video, status: deferred-archive, sources: [internet-archive-prelinger], license: public-domain, notes: "black-and-white General Motors training/industrial/sponsored films, 1920s-1960s. Search handles: Jam Handy Organization, Chevrolet, General Motors, Prelinger"}
+  # ---- content-expansion batch ----
+  - {name: Military/Naval,      type: video, status: fetch,   category: military, license: public-domain, notes: "old military/naval footage; US Gov/National Archives = PD. Search: US Navy, WWII newsreel, military training film"}
+  - {name: Atomic Tests,        type: video, status: fetch,   category: atomic_era, license: public-domain, notes: "atomic bomb TEST footage (distinct from civil-defense films already pulled); US Gov PD. Search: nuclear test, Operation Crossroads, atomic detonation"}
+  - {name: Classic Cartoons,    type: video, status: fetch,   category: cartoons, license: public-domain, notes: "PD black-and-white cartoons — early rubber-hose animation (NOT Steamboat Willie, still Disney-copyright), e.g. Betty Boop, Popeye (some PD), Out of the Inkwell, Flip the Frog, ComiColor. Verify each is actually PD. The metamorphosis one = likely early Fleischer/rubber-hose"}
+  - {name: Trippy Animation,    type: video, status: fetch,   category: trippy, license: public-domain, notes: "psychedelic/experimental animation; Prelinger + PD experimental film. Search: experimental animation, oscilloscope, kaleidoscope, abstract film"}
+  - {name: Fun Animations,      type: video, status: fetch,   category: fun_animation, license: cc-pd, notes: "fractals, kaleidoscopes, paint-in-water/paint-stirring, microscope timelapse. Sources: NASA, Wikimedia, PD science film"}
+  - {name: Automotive,          type: video, status: fetch,   category: automotive, license: public-domain, notes: "racing, mechanics, automotive educational films. Prelinger has tons (Jam Handy did GM). Search: auto racing newsreel, car mechanics educational, hot rod"}
+  - {name: Card Music Beds,     type: audio, status: fetch,   category: music_beds, license: pd-cc, notes: "PD/CC music clips to play UNDER some text cards instead of silence. Sources: Musopen (PD classical), archive.org 78rpm/PD music, FMA CC"}
+
+# ---- IMAGE (download + reveal) ------------------------------------------------
+image:
+  - {name: One-Minute Museum,     type: image, status: data-api, sources: [met-openaccess, smithsonian-open, rijksmuseum, art-institute, europeana], license: cc0-open, notes: "paintings/photos/artifacts/maps/patent drawings"}
+  - {name: "What Am I Looking At?", type: image, status: data-api, treatment: [slow-zoom], sources: [met-openaccess, wikimedia], license: cc0-open, notes: "start extremely cropped, slowly reveal"}
+  - {name: Then / Now,            type: image, status: fetch,     sources: [wikimedia, loc-photos], license: cc-pd, notes: "historical image of a place, then its modern look"}
+  - {name: Internet Archaeology,  type: image, status: fetch,     sources: [oldweb-today, wikimedia-ui-screenshots, guidebook-museum], license: mixed, notes: "old websites/software UIs/forgotten tech"}
+
+# ---- DATA-API CARDS (live/reference data -> rendered card) --------------------
+data_cards:
+  - {name: Patent of the Day,   type: card, status: data-api, sources: [patentsview, google-patents], license: public-domain, notes: "bizarre historical patent drawing + title + year"}
+  - {name: On This Day,         type: card, status: data-api, sources: [wikimedia-onthisday-api], license: cc, notes: "one interesting event for today's date; free, no key"}
+  - {name: Weather Somewhere Else, type: card, status: data-api, sources: [open-meteo], license: free, notes: "weather from an arbitrary place + footage/cam from there"}
+  - {name: Earth Is Big,        type: card, status: data-api, sources: [open-meteo], license: free, notes: "contrast home time/weather with somewhere radically different"}
+  - {name: Above You,           type: card, status: data-api, sources: [open-notify-iss, astronomy-ephemeris], license: free, notes: "ISS/satellite passes, visible planets, Moon phase, sky events"}
+  - {name: Transit Board,       type: card, status: data-api, sources: [gtfs-realtime-public, transitland], license: mixed, notes: "live/recent departures from a random station/airport/ferry"}
+  - {name: "Teletext/Ceefax",   type: card, status: generate, sources: [open-meteo, internal], license: n/a, notes: "retro info pages (weather/trivia/schedule/system info + nonsense)"}
+
+# ---- LOCAL-MODEL GENERATED CARDS (no download; your configured model) --------
+model_cards:
+  - {name: Trivia,             type: card, status: generate, treatment: [delayed-answer], notes: "movie/tv/music/science/history/geography/tech/general"}
+  - {name: Fun Facts,          type: card, status: generate, notes: "genuinely interesting short facts (+optional related image/video later)"}
+  - {name: Guess the Year,     type: card, status: data-api, treatment: [reveal-late], notes: "show object/photo/movie/tech, reveal its year (image via museum/wiki)"}
+  - {name: Three Clues,        type: card, status: generate, treatment: [progressive], notes: "3 progressively easier clues -> movie/show/place/person/object"}
+  - {name: Connections,        type: card, status: generate, notes: "unexpected chain linking two movies/actors/events/objects"}
+  - {name: Fake PSAs,          type: card, status: generate, notes: "dry, strange, dead-serious PSAs (generator exists)"}
+  - {name: Corrections, type: card, status: generate, notes: "deadpan corrections, incl. corrections to things that were not wrong"}
+  - {name: Unexplained Numbers, type: card, status: generate, treatment: [reveal-late], notes: "number with no context, then reveal its meaning (generator exists)"}
+  - {name: Numbers Station,    type: card, status: generate, notes: "cryptic numbers/symbols; occasionally an actual solvable message; +TTS audio later"}
+  - {name: Tiny Games,         type: card, status: generate, notes: "higher/lower, which-came-first, silhouettes, geography guesses; 15-60s"}
+  - {name: Library Trivia,     type: card, status: deferred-jelly, notes: "trivia from Jellyfin shows/movies/actors/directors/connections"}
+
+# ---- INTERNAL / PROCEDURAL (station's self-awareness; no external content) ----
+internal:
+  - {name: Technical Difficulties, type: generate, status: generate, notes: "static/test patterns/VHS glitch/broken-feed/fake failures; render in player"}
+  - {name: Station IDs,          type: generate, status: generate, notes: "short brand idents/cards; simple ones render now, richer ones later"}
+  - {name: Dead Air,             type: generate, status: generate, notes: "rare near-silent black bumper + tiny brand ident; trivial"}
+  - {name: Local Time,           type: generate, status: generate, notes: "minimalist clock/date card as broadcast breathing room (Jarvis time route exists)"}
+  - {name: Channel Statistics,    type: generate, status: generate, notes: "real-but-useless telemetry: uptime, bumpers served, time since a category last aired (we have the data)"}
+  - {name: Previously On This Channel, type: card,     status: generate, notes: "deadpan recap of recent programming + mundane live-cam events (uses play_history)"}
+  - {name: Coming Up Eventually, type: card,     status: generate, notes: "deliberately vague previews of what the scheduler expects to show later"}
+  - {name: Viewer Achievements,  type: card,     status: generate, notes: "joke achievements e.g. 'survived a Window where nothing happened'"}

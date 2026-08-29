@@ -1,0 +1,40 @@
+{
+  "_comment": "Model-free starter cards for the kinds that are otherwise model-generated (psa, corrections, coming_up, achievements, tiny_games). These ship so a no-model install is never empty. They are deliberately plain, generic EXAMPLES — replace or extend them with your own, and point Bumparr at a model endpoint to generate far more in your own voice. Shapes match the model output: prose kinds use `lines`; tiny_games uses `lines` (prompt + options) and airs as an open prompt.",
+  "psa": [
+    {"lines": ["This is a test.", "It has always been a test."]},
+    {"lines": ["Please remain calm.", "Calm is mandatory."]},
+    {"lines": ["The exits are where you left them."]},
+    {"lines": ["Do not adjust your expectations.", "They are between programs."]},
+    {"lines": ["If you can read this,", "the signal is working."]},
+    {"lines": ["Stand by.", "Something is on its way.", "Possibly."]}
+  ],
+  "corrections": [
+    {"lines": ["Earlier we said 'soon.'", "We meant 'eventually.'"]},
+    {"lines": ["A previous broadcast implied improvement.", "We regret the implication."]},
+    {"lines": ["The word 'live' was used loosely.", "We apologize to the word."]},
+    {"lines": ["Correction: the number was a different number.", "We stand by the confusion."]},
+    {"lines": ["We may have promised a surprise.", "The surprise is that there isn't one."]}
+  ],
+  "coming_up": [
+    {"lines": ["Coming up: more of this.", "Then, slightly less."]},
+    {"lines": ["Later: a pause.", "Followed by another pause."]},
+    {"lines": ["Next: something you have seen,", "rearranged."]},
+    {"lines": ["Soon: the same channel,", "from a new angle."]},
+    {"lines": ["Coming up eventually:", "tomorrow."]}
+  ],
+  "achievements": [
+    {"lines": ["ACHIEVEMENT UNLOCKED", "Still Watching"]},
+    {"lines": ["ACHIEVEMENT UNLOCKED", "Witnessed a Test Pattern"]},
+    {"lines": ["ACHIEVEMENT UNLOCKED", "Did Not Change the Channel"]},
+    {"lines": ["ACHIEVEMENT UNLOCKED", "Present and Accounted For"]},
+    {"lines": ["ACHIEVEMENT UNLOCKED", "Read the Small Text"]}
+  ],
+  "tiny_games": [
+    {"lines": ["Coffee or tea?", "Coffee", "Tea"]},
+    {"lines": ["Mountains or ocean?", "Mountains", "Ocean"]},
+    {"lines": ["Morning or night?", "Morning", "Night"]},
+    {"lines": ["Sweet or savory?", "Sweet", "Savory"]},
+    {"lines": ["Cats or dogs?", "Cats", "Dogs"]},
+    {"lines": ["Books or movies?", "Books", "Movies"]}
+  ]
+}

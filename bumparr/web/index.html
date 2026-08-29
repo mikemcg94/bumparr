@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bumparr</title>
+  <link rel="stylesheet" href="/web/style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">▮ Bumparr</div>
+    <div class="tag">bumper generator for the *arr stack</div>
+    <div id="status-pill" class="pill">…</div>
+  </header>
+
+  <main>
+    <!-- natural-language ingest: type what you want, Bumparr pulls it in -->
+    <section class="panel wide askbar">
+      <div class="ask-row">
+        <input id="ask" class="ask" autocomplete="off"
+          placeholder="pull something into the rotation…  e.g. a webcam URL, 'more tech difficulties', 'I want more stoner stuff'" />
+        <button id="ask-go">＋ Add</button>
+      </div>
+      <div id="ask-result" class="ask-result"></div>
+      <div class="ask-hints">try: a <b>.m3u8 webcam URL</b> · a <b>YouTube live cam</b> · an <b>archive.org</b> link · "more <b>dead air</b> cards" · "<b>5</b> golf clips" · "<b>uncle sam</b> posters" · "more <b>trippy</b> stuff" &nbsp;— add a number to pull more (default 3, max 15)</div>
+    </section>
+
+    <!-- top row: pool stats + actions -->
+    <section class="panel">
+      <h2>Pool</h2>
+      <div id="totals" class="totals"></div>
+      <div id="by-type" class="bars"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Actions</h2>
+      <div class="actions">
+        <div class="action-group">
+          <span class="lbl">Generate cards</span>
+          <button data-gen="trivia">Trivia <em>(grounded)</em></button>
+          <button data-gen="fun_facts">Fun facts <em>(grounded)</em></button>
+          <button data-gen="on_this_day">On this day</button>
+          <button data-gen="psa">PSAs <em>(model)</em></button>
+        </div>
+        <div class="action-group">
+          <span class="lbl">Refresh sources</span>
+          <button data-src="capture-windows">Recapture live cams</button>
+          <button data-src="fetch-queue">Run fetch queue</button>
+        </div>
+        <div class="action-group">
+          <span class="lbl">Starter pack</span>
+          <button data-starter="dry">Preview seeds</button>
+          <button data-starter="run">Seed the pool <em>(uses your API keys)</em></button>
+        </div>
+        <div class="action-group">
+          <span class="lbl">Maintenance</span>
+          <button data-maint="tidy">Tidy up <em>(empty dirs, 0-byte files)</em></button>
+          <button data-maint="revive">Recheck retired <em>(restore playable)</em></button>
+        </div>
+        <div class="action-group">
+          <span class="lbl">Consume</span>
+          <a class="linkbtn" href="/playlist.m3u" target="_blank">playlist.m3u</a>
+          <a class="linkbtn" href="/api/bumpers/random?count=5" target="_blank">random API</a>
+        </div>
+      </div>
+      <pre id="log" class="log">ready.</pre>
+    </section>
+
+    <!-- browser: filter by category, see everything -->
+    <section class="panel wide">
+      <h2>Browse the pool
+        <input id="search" class="search" placeholder="filter by title…" />
+        <button id="shuffle" class="mini">⟳ shuffle preview</button>
+      </h2>
+      <div id="filters" class="filters"></div>
+      <div id="grid" class="grid"></div>
+      <div id="more-row"><button id="more" class="mini hidden">load more</button></div>
+    </section>
+  </main>
+
+  <footer>
+    Bumparr —
+    AGPL-3.0, source: <a href="https://github.com/mikemcg94/bumparr" target="_blank" rel="noopener">github.com/mikemcg94/bumparr</a>
+  </footer>
+
+  <script src="/web/app.js"></script>
+</body>
+</html>
