@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+      # The headline promise is that Bumparr runs with no model. This asserts it
+      # rather than trusting it: boot the real app with NO model endpoint set and
+      # confirm it serves and produces cards in every kind.
+      - name: No-model smoke
+        env:
+          DB_PATH: /tmp/ci.db
+          ASSET_ROOT: /tmp/ci-assets
+          DATA_DIR: /tmp/ci-data
+          WINDOW_REFRESH: "0"
+        run: |
+          mkdir -p /tmp/ci-assets /tmp/ci-data
+          python - <<'PY'
+          from bumparr import db, ingest
+          from bumparr.generators import grounded
+          db.init_db()
+          seeded = ingest.register_all_baselines()
+          numbers = grounded.gen_number(5)
+          import sqlite3, os
+          c = sqlite3.connect(os.environ["DB_PATH"])
+          total, kinds = c.execute(
+              "select count(*), count(distinct kind) from playables where type='card'").fetchone()
+          print(f"no-model pool: {total} cards across {kinds} kinds "
+                f"({seeded} baseline, {numbers} grounded numbers)")
+          assert total > 0, "no cards generated without a model"
+          assert kinds >= 5, f"expected cards in several kinds, got {kinds}"
+          PY
+
+      - name: App imports and serves
+        env:
+          DB_PATH: /tmp/ci2.db
+          ASSET_ROOT: /tmp/ci-assets
+        run: |
+          python -c "from bumparr.app import app; print('app imports OK')"

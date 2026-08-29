@@ -20,6 +20,10 @@ docker compose up -d
 
 Runs as its own service on port `8780`, next to the rest of your stack.
 
+> **Note:** YouTube-backed live cams shell out to `yt-dlp`, so it needs to be on
+> PATH for those. The direct DOT/HLS cams and every other bumper kind work
+> without it.
+
 ## What it produces
 
 Bumpers are "playables" of several types, all served from one pool:
@@ -80,6 +84,14 @@ Every URL Bumparr hands out is absolute, because the thing that fetches a playli
 is rarely the thing that plays its entries. Behind a reverse proxy, set
 `PUBLIC_URL` to the address consumers actually reach; otherwise Bumparr
 derives it from the incoming request.
+
+Also `GET /api/bumpers/fill?seconds=N`, which hands back a *set* of bumpers that
+adds up to a gap — solved as a subset-sum rather than a greedy pass, so a break
+doesn't end in dead air. That is the contract a channel generator actually
+needs, and nothing else in the \*arr ecosystem offers it.
+
+**→ [Wiring Bumparr into your channel](docs/INTEGRATION.md)** — concrete setup
+for ErsatzTV, Tunarr and Dispatcharr.
 
 ## The pool maintains itself
 

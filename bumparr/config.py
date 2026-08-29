@@ -25,7 +25,7 @@ _root = _here.parent
 ASSET_ROOT = Path(env("ASSET_ROOT", "/assets"))
 
 # SQLite database (playable registry + channel playout state).
-DB_PATH = env("DB", str(_root / "data" / "bumparr.db"))
+DB_PATH = env("DB_PATH", str(_root / "data" / "bumparr.db"))
 
 FRONTEND_DIR = Path(env("FRONTEND", str(_here)))  # secondary font search path
 

@@ -10,7 +10,7 @@ services:
       - "${PORT:-8780}:8780"
     environment:
       - ASSET_ROOT=/assets
-      - DB=/data/bumparr.db
+      - DB_PATH=/data/bumparr.db
       - BRAND=${BRAND:-Bumparr}
       # Set behind a reverse proxy so emitted M3U / bumper URLs are absolute.
       - PUBLIC_URL=${PUBLIC_URL:-}
