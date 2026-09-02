@@ -124,7 +124,9 @@ MP4s; a consumer that reads the API can use them directly.
 
 ## Notes
 
-- **Live cams need `yt-dlp` on PATH** for the YouTube-backed ones. The direct
-  DOT/HLS cams work without it, as does everything else.
+- **YouTube-backed live cams use `yt-dlp`**, which ships in `requirements.txt`
+  and is therefore already in the Docker image — you only need to think about it
+  if you run Bumparr outside the normal install. The direct DOT/HLS cams work
+  without it regardless.
 - **A local model is optional.** Grounded cards, procedural kinds, and a
   built-in starter set all work with no model configured. See the README.

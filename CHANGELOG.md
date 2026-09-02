@@ -32,6 +32,9 @@ invented, and `card_validation` rejects malformed cards at generation time
 answer, truncated facts, placeholder numbers).
 
 **Notes**
-- YouTube-backed live cams need `yt-dlp` on PATH. Everything else, including
-  the direct DOT/HLS cams, works without it.
+- YouTube-backed live cams use `yt-dlp`, which ships in `requirements.txt` and
+  is already in the Docker image. The direct DOT/HLS cams work without it.
+- With no `PUBLIC_URL` set, emitted URLs are derived from the incoming request.
+  Bumparr warns if that derivation is a loopback address, since those URLs
+  cannot be reached by any other host, container or player.
 - Bundled fonts are SIL OFL. No media assets ship with Bumparr.

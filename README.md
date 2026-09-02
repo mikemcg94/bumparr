@@ -20,9 +20,10 @@ docker compose up -d
 
 Runs as its own service on port `8780`, next to the rest of your stack.
 
-> **Note:** YouTube-backed live cams shell out to `yt-dlp`, so it needs to be on
-> PATH for those. The direct DOT/HLS cams and every other bumper kind work
-> without it.
+> **Note:** YouTube-backed live cams shell out to `yt-dlp`. It ships in
+> `requirements.txt`, so the Docker image and any normal pip install already
+> have it — this only matters if you run Bumparr some other way. The direct
+> DOT/HLS cams and every other bumper kind work without it either way.
 
 ## What it produces
 
