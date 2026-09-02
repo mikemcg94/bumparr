@@ -25,27 +25,33 @@ cams:
   - {title: "Live: Louisiana DOT 5", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-017.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
   - {title: "Live: Louisiana DOT 6", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-021.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
 
-# --- SNAPSHOT cams: YouTube-backed (can't be true-live), captured as fresh ~60-95s
-# clips on a refresh cycle. `query` is a YouTube search resolved to whatever is
-# currently live. Add your LOCAL cams here (location-bound). ---
-snapshot_cams:
-  # calm / scenic
-  - {slug: jackson-hole, query: "Jackson Hole Wyoming Town Square live cam"}
-  - {slug: venice, query: "Venice Italy Grand Canal live cam"}
-  - {slug: waikiki, query: "Waikiki Beach Honolulu live cam"}
-  # nature / wildlife
-  - {slug: africa-waterhole, query: "explore.org African watering hole live cam"}
-  - {slug: monterey-jellies, query: "Monterey Bay Aquarium jelly cam live"}
-  - {slug: bird-feeder, query: "Cornell Lab bird feeder live cam"}
-  # urban / transit
-  - {slug: times-square, query: "Times Square NYC live cam EarthCam"}
-  - {slug: shibuya, query: "Shibuya Crossing Tokyo live cam"}
-  - {slug: abbey-road, query: "Abbey Road crossing London live cam"}
-  # weird / liminal
-  - {slug: aurora, query: "Northern Lights aurora live cam"}
-  - {slug: old-faithful, query: "Old Faithful geyser live cam"}
-  # your own local cams — many DOT feeds are snapshot/keyed, so YouTube-live
-  # searches for your area work well here.
-  # space / ISS
-  - {slug: iss-earth, query: "ISS live stream NASA earth from space"}
-  - {slug: nasa-live, query: "NASA live ISS HD earth views"}
+# --- SNAPSHOT cams: OPT-IN, and empty on purpose ------------------------------
+#
+# These resolve a YouTube search to whatever is live right now and capture a
+# fresh ~60-95s clip on a refresh cycle. The capability is built in and works
+# (it needs `yt-dlp`, which ships in requirements.txt) -- but Bumparr does not
+# ship any YouTube entries enabled by default, for two honest reasons:
+#
+#   1. Scraping YouTube is between you and YouTube's terms of service. That is
+#      a fine call for you to make for your own private install; it is not a
+#      call this project should make FOR you by shipping it switched on.
+#   2. They are not actually live. A snapshot cam is a recent recording on a
+#      refresh cycle, so it does not give you the "wait, is that happening
+#      right now?" moment. The `cams` section above -- open, direct HLS -- does.
+#
+# Want them? Uncomment and edit. `slug` is any short name you like; `query` is
+# literally what you would type into YouTube search.
+#
+# snapshot_cams:
+#   # calm / scenic
+#   - {slug: harbour,     query: "harbour live cam"}
+#   - {slug: mountain,    query: "mountain webcam live"}
+#   # nature / wildlife
+#   - {slug: bird-feeder, query: "bird feeder live cam"}
+#   # urban / transit
+#   - {slug: crossing,    query: "city crossing live cam"}
+#   # your own area -- many DOT feeds are snapshot-based or need a key, so a
+#   # YouTube-live search is often the easiest way to get a LOCAL window.
+#   - {slug: my-town,     query: "<your town> live cam"}
+#   # space
+#   - {slug: iss,         query: "ISS live stream earth from space"}

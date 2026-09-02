@@ -14,8 +14,9 @@ interstitials that any channel generator can consume.
 
 **Bumper kinds**
 - Video from your own media and public-domain archives.
-- Live "window" cams — direct HLS DOT feeds play genuinely live; YouTube-backed
-  ones are captured as fresh looping snippets.
+- Live "window" cams — open direct-HLS feeds play genuinely live and ship
+  enabled. YouTube-backed snapshot cams are supported but ship disabled; a
+  commented template in `live_cams.yaml` shows how to add your own.
 - Text cards: grounded trivia and fun-facts, verified numbers, plus surreal
   PSAs, fake corrections, achievements and more.
 - Procedural station IDs and technical-difficulties cards.
@@ -32,8 +33,9 @@ invented, and `card_validation` rejects malformed cards at generation time
 answer, truncated facts, placeholder numbers).
 
 **Notes**
-- YouTube-backed live cams use `yt-dlp`, which ships in `requirements.txt` and
-  is already in the Docker image. The direct DOT/HLS cams work without it.
+- No YouTube entries ship enabled. Whether to scrape YouTube is the operator's
+  call, so Bumparr keeps the capability (`yt-dlp` is installed) but leaves it
+  switched off by default.
 - With no `PUBLIC_URL` set, emitted URLs are derived from the incoming request.
   Bumparr warns if that derivation is a loopback address, since those URLs
   cannot be reached by any other host, container or player.

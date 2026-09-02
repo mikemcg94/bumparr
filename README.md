@@ -20,10 +20,11 @@ docker compose up -d
 
 Runs as its own service on port `8780`, next to the rest of your stack.
 
-> **Note:** YouTube-backed live cams shell out to `yt-dlp`. It ships in
-> `requirements.txt`, so the Docker image and any normal pip install already
-> have it — this only matters if you run Bumparr some other way. The direct
-> DOT/HLS cams and every other bumper kind work without it either way.
+> **Note:** The live cams that ship enabled are open, direct-HLS feeds — no key,
+> no scraping, genuinely real-time. Bumparr can *also* capture YouTube-backed
+> cams, but ships none enabled: whether to scrape YouTube is your call to make
+> for your own install, not this project's to make for you. See
+> `bumparr/config_files/live_cams.yaml` for a commented template.
 
 ## What it produces
 
@@ -32,7 +33,7 @@ Bumpers are "playables" of several types, all served from one pool:
 - **video** — public-domain clips (Internet Archive), NASA/ambient loops, vintage
   station IDs, cartoons, your own media
 - **stream** — live "window" cams (open DOT traffic cams play truly live;
-  YouTube-backed cams are captured as fresh looping snippets on a schedule)
+  YouTube-backed cams are opt-in, captured as fresh looping snippets)
 - **card** — generated text cards: trivia & fun-facts (**grounded in real sources**,
   not model hallucination), surreal PSAs, "we'll be right back", unexplained
   numbers, on-this-day, and more
