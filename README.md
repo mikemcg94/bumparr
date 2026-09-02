@@ -95,6 +95,9 @@ needs, and nothing else in the \*arr ecosystem offers it.
 **→ [Wiring Bumparr into your channel](docs/INTEGRATION.md)** — concrete setup
 for ErsatzTV, Tunarr and Dispatcharr.
 
+**→ [Making the cards yours](docs/CARDS.md)** — write your own, edit the model
+prompts that give your channel its voice, or add a new card kind.
+
 ## The pool maintains itself
 
 - Live-window cams re-capture on a schedule so they stay current.
