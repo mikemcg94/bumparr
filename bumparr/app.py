@@ -13,6 +13,7 @@ or player can consume.
 Run:  uvicorn bumparr.app:app --host 0.0.0.0 --port 8780
 """
 import json
+import re
 import os
 import random
 import subprocess
@@ -119,16 +120,36 @@ def list_bumpers(request: Request, type: str = None, kind: str = None, limit: in
     return {"count": len(out), "bumpers": out}
 
 
+_LOOPBACK_WARNED = False
+
+
 def _public_base(request):
     """Base URL external consumers should use to reach this Bumparr.
 
     Explicit config wins (needed behind a reverse proxy, where the app cannot
     see its own public hostname). Otherwise derive it from the request, which is
     correct for direct access on a LAN port.
+
+    The derived form mirrors whoever asked, which is right when the fetcher and
+    the player are the same machine and silently wrong when they are not: fetch
+    the playlist over loopback and every entry says 127.0.0.1, which no other
+    host or container can play. That failure is invisible -- the playlist looks
+    fine and simply does not work -- so warn once rather than let a deployer
+    discover it through a dead channel.
     """
     if config.PUBLIC_BASE_URL:
         return config.PUBLIC_BASE_URL
-    return str(request.base_url).rstrip("/") if request else ""
+    if not request:
+        return ""
+    base = str(request.base_url).rstrip("/")
+    global _LOOPBACK_WARNED
+    if not _LOOPBACK_WARNED and re.search(r"//(127\.0\.0\.1|localhost|\[::1\])\b", base):
+        _LOOPBACK_WARNED = True
+        print("[bumparr] WARNING: handing out %s URLs, derived from a loopback "
+              "request. Anything else -- another container, another host, a "
+              "player -- cannot reach those. Set PUBLIC_URL to the address your "
+              "consumers actually use." % base)
+    return base
 
 
 def _absolutize(url, request):
