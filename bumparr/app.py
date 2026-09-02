@@ -561,9 +561,9 @@ def render_cards(limit: int = None, force: bool = False):
 
 @app.post("/api/generate/{kind}")
 def generate(kind: str, n: int = 20):
-    """Generate cards. Grounded kinds (trivia, fun_facts) use real sources; the
-    absurd kinds (psa, etc.) use the local model."""
-    grounded = {"trivia", "fun_facts"}
+    """Generate cards. Grounded kinds (trivia, fun_facts, number) use real
+    sources; the absurd kinds (psa, etc.) use the local model."""
+    grounded = {"trivia", "fun_facts", "number"}
     model_kinds = {"psa", "corrections", "achievements",
                    "coming_up", "tiny_games"}
     try:

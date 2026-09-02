@@ -685,6 +685,15 @@ def register_all_baselines():
     for k in PROCEDURAL:
         _register_procedural(k)
     total = sum(register_card_seeds(k) for k in MODEL_CARD_KINDS)
+    # Numbers are grounded in a VENDORED dataset -- no model and no network --
+    # so they belong in the offline floor too. Without this a fresh install has
+    # no factual cards at all until someone thinks to generate some, which made
+    # the model-free pool look like comedy-only.
+    try:
+        from bumparr.generators.grounded import gen_number
+        total += gen_number(12)
+    except Exception as e:
+        print("[bumparr] grounded numbers unavailable:", e)
     return total
 
 
