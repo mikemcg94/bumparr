@@ -14,11 +14,12 @@ Declared, and never modified by the system:
 
 Computed fresh at every selection, never written back:
     season      is this appropriate for today's date
+    daypart     does this kind belong to this hour of the day (dayparts.yaml)
     recency     did THIS clip just play — deep drop, slow recovery
     affinity    did something LIKE it just play — shallower drop, quicker recovery
     fatigue     has it been overplayed across its whole life
 
-    score = base x season x recency x affinity x fatigue
+    score = base x season x daypart x recency x affinity x fatigue
 
 Because nothing is written back, the model is idempotent, explainable after the
 fact, and safe to change: adjusting a curve alters behaviour immediately without
@@ -30,10 +31,9 @@ recovery is fast at first and then slow, so a clip becomes eligible again
 reasonably soon but does not fully reset for a long while — which is what makes
 a rotation feel like a rotation rather than a shuffle.
 """
-import os
+import time
 
 from bumparr import config
-import time
 
 # --- recency: this exact clip -------------------------------------------------
 # The strongest signal. Just played means effectively out of the running, and it
@@ -55,8 +55,6 @@ AFFINITY_FLOOR = float(config.env("AFFINITY_FLOOR", 0.30))
 FATIGUE_STRENGTH = float(config.env("FATIGUE_STRENGTH", 0.5))
 FATIGUE_MIN = float(config.env("FATIGUE_MIN", 0.25))
 FATIGUE_MAX = float(config.env("FATIGUE_MAX", 1.6))
-
-NEVER = 10 ** 9          # stand-in age for something that has never played
 
 
 def _recover(age, tau, floor):
@@ -103,7 +101,7 @@ def score(item, ctx, now=None):
 
     `item` needs base/weight, kind, last_played and play_count.
     `ctx` carries pool-wide state: {"kind_last": {kind: ts}, "median_plays": n,
-    "season": {kind: factor}}.
+    "season": {kind: factor}, "daypart": {kind: factor}}.
     """
     now = now or time.time()
     base = item.get("base")
@@ -114,10 +112,11 @@ def score(item, ctx, now=None):
         return 0.0            # deliberately off air; see seasons.off_weight
 
     s = float((ctx.get("season") or {}).get(item.get("kind"), 1.0))
+    d = float((ctx.get("daypart") or {}).get(item.get("kind"), 1.0))
     r = recency(item.get("last_played"), now)
     a = affinity((ctx.get("kind_last") or {}).get(item.get("kind")), now)
     f = fatigue(item.get("play_count"), ctx.get("median_plays", 1))
-    return base * s * r * a * f
+    return base * s * d * r * a * f
 
 
 def explain(item, ctx, now=None):
@@ -125,15 +124,17 @@ def explain(item, ctx, now=None):
     now = now or time.time()
     base = float(item.get("base") if item.get("base") is not None else (item.get("weight") or 0))
     s = float((ctx.get("season") or {}).get(item.get("kind"), 1.0))
+    d = float((ctx.get("daypart") or {}).get(item.get("kind"), 1.0))
     r = recency(item.get("last_played"), now)
     a = affinity((ctx.get("kind_last") or {}).get(item.get("kind")), now)
     f = fatigue(item.get("play_count"), ctx.get("median_plays", 1))
-    return {"base": round(base, 3), "season": round(s, 3), "recency": round(r, 3),
+    return {"base": round(base, 3), "season": round(s, 3), "daypart": round(d, 3),
+            "recency": round(r, 3),
             "affinity": round(a, 3), "fatigue": round(f, 3),
-            "score": round(base * s * r * a * f, 4)}
+            "score": round(base * s * d * r * a * f, 4)}
 
 
-def build_context(rows, season_factors=None, now=None):
+def build_context(rows, season_factors=None, now=None, daypart_factors=None):
     """Derive the pool-wide state `score()` needs from the rows themselves.
 
     Kept here rather than in each caller so the player, the random API and the
@@ -150,19 +151,20 @@ def build_context(rows, season_factors=None, now=None):
     plays.sort()
     median = plays[len(plays) // 2] if plays else 0
     return {"kind_last": kind_last, "median_plays": median,
-            "season": season_factors or {}, "now": now}
+            "season": season_factors or {}, "daypart": daypart_factors or {}, "now": now}
 
 
-def weights_for(rows, season_factors=None, now=None):
+def weights_for(rows, season_factors=None, now=None, daypart_factors=None):
     """Scores for a list of rows, ready to hand to a weighted choice."""
-    ctx = build_context(rows, season_factors, now)
+    ctx = build_context(rows, season_factors, now, daypart_factors)
     return [score(r, ctx, ctx["now"]) for r in rows], ctx
 
 
 def describe_settings():
+    """One-line summary of the active curve parameters, for status output and
+    debugging "why did that play?" questions against a running config."""
     return ("recency tau=%.1fh floor=%.3f | affinity tau=%.0fmin floor=%.2f | "
             "fatigue strength=%.2f clamp=[%.2f,%.2f]"
             % (RECENCY_TAU / 3600.0, RECENCY_FLOOR, AFFINITY_TAU / 60.0,
                AFFINITY_FLOOR, FATIGUE_STRENGTH, FATIGUE_MIN, FATIGUE_MAX))
-
 

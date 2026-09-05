@@ -10,6 +10,7 @@ only helps turn a fuzzy vibe into search terms + a category, with a plain fallba
 """
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -17,10 +18,12 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import uuid
 
-from bumparr import config, db
+from bumparr import config, db, paths
 from bumparr.card_validation import validate_card
 
+log = logging.getLogger(__name__)
 UA = {"User-Agent": "Mozilla/5.0 bumparr (polite)"}
 ASSET = config.ASSET_ROOT
 
@@ -61,10 +64,19 @@ VIBE_MAP = {
 
 
 def _gj(url, timeout=30):
-    return json.load(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout))
+    """GET a URL and parse the body as JSON, with the polite user agent."""
+    with urllib.request.urlopen(
+            urllib.request.Request(url, headers=UA), timeout=timeout) as response:
+        return json.load(response)
 
 
 def _insert_stream(title, url, direct, kind="webcam", region="user-added"):
+    """Register a live HLS feed as a stream playable, idempotently by URL.
+
+    `direct` decides the playback path: True serves the upstream URL to the
+    browser as-is (works only if the feed sends CORS headers, which _test_cors
+    checked); False routes it through the same-origin proxy instead.
+    """
     pid = "stream:cam:" + hashlib.md5(url.encode()).hexdigest()[:10]
     payload = json.dumps({"direct": direct, "label": title, "region": region})
     with db.conn() as c:
@@ -108,26 +120,57 @@ def _reject_portrait(path):
 
 
 def _download_video(url, category, title=None, reseed=True):
-    outdir = os.path.join(ASSET, category)
-    os.makedirs(outdir, exist_ok=True)
+    """Download a direct video URL into `category` and register it.
+
+    Returns a human message starting "added" on success — callers branch on
+    that prefix, so keep it. Guards: tiny files are failed downloads, and
+    phone-format vertical is rejected post-download (see _reject_portrait).
+    Reseeds once per batch, not per clip (reseed=False for batch pulls).
+    """
+    outdir = paths.resolve_kind_dir(ASSET, category)
+    if outdir is None:
+        return "download failed: invalid category"
+    outdir.mkdir(parents=True, exist_ok=True)
     fn = title or os.path.basename(urllib.parse.urlparse(url).path) or ("clip_%d.mp4" % int(time.time()))
     if not fn.lower().endswith((".mp4", ".webm", ".mkv")):
         fn += ".mp4"
-    dest = os.path.join(outdir, re.sub(r"[^\w.\-]", "_", fn))
+    dest = outdir / paths.safe_filename(fn)
+    partial = dest.with_name(".%s.%s.part" % (dest.name, uuid.uuid4().hex))
+    cap = MAX_DOWNLOAD_MB * 1048576
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=180) as r, open(dest, "wb") as out:
-            while True:
-                b = r.read(262144)
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=180) as r, partial.open("xb") as out:
+            try:
+                ctype = (r.headers.get("Content-Type") or "")
+            except Exception:
+                ctype = ""
+            if ctype.split(";")[0].strip().lower() == "text/html":
+                raise ValueError("unexpected content type")
+            try:
+                declared = int(r.headers.get("Content-Length") or 0)
+            except (AttributeError, TypeError, ValueError):
+                declared = 0
+            if declared > cap:
+                raise ValueError("download too large")
+            total = 0
+            while total <= cap:
+                b = r.read(min(262144, cap + 1 - total))
                 if not b:
                     break
+                total += len(b)
+                if total > cap:
+                    raise ValueError("download too large")
                 out.write(b)
-    except Exception as e:
-        return "download failed: %s" % e
-    if os.path.getsize(dest) < 20000:
-        os.remove(dest)
-        return "download too small / failed"
-    if _reject_portrait(dest):
-        return "skipped a vertical phone-format clip (not broadcast-shaped)"
+        if total < 20000:
+            raise ValueError("download too small")
+        if _reject_portrait(str(partial)):
+            return "skipped a vertical phone-format clip (not broadcast-shaped)"
+        os.replace(partial, dest)
+    except Exception:
+        try:
+            partial.unlink()
+        except OSError:
+            pass
+        return "download failed"
     # Batch pulls pass reseed=False and reseed ONCE at the end — one full-tree
     # reseed per clip hammers the shared DB and triggers 'database is locked'.
     if reseed:
@@ -139,9 +182,12 @@ def _capture_youtube(url_or_query, category="windows", slug=None):
     """Snapshot a YouTube-live cam as a short looping clip (same path as live windows)."""
     ytdlp = _which("yt-dlp")
     slug = slug or ("yt_" + hashlib.md5(url_or_query.encode()).hexdigest()[:8])
-    outdir = os.path.join(ASSET, category)
-    os.makedirs(outdir, exist_ok=True)
-    dest = os.path.join(outdir, slug + ".mp4")
+    outdir = paths.resolve_kind_dir(ASSET, category)
+    if outdir is None:
+        return "capture failed: invalid category"
+    outdir.mkdir(parents=True, exist_ok=True)
+    dest = outdir / (paths.safe_filename(slug, "capture") + ".mp4")
+    partial = dest.with_name(".%s.%s.part.mp4" % (dest.name, uuid.uuid4().hex))
     try:
         target = url_or_query if url_or_query.startswith("http") else "ytsearch1:" + url_or_query
         u = subprocess.run([ytdlp, "--no-warnings", "--get-url", "-f", "b[height<=720]/b", target],
@@ -151,34 +197,49 @@ def _capture_youtube(url_or_query, category="windows", slug=None):
         # Constant frame rate, not -c copy: some cam encoders declare a nominal
         # rate they do not actually deliver, and copying preserves the resulting
         # stutter. Same reason as sources/capture_windows.py.
-        subprocess.run(["ffmpeg", "-y", "-rw_timeout", "15000000", "-i", u, "-t", "35",
+        rendered = subprocess.run(["ffmpeg", "-y", "-rw_timeout", "15000000", "-i", u, "-t", "35",
                         "-vsync", "cfr", "-r", "30", "-c:v", "libx264",
                         "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-                        "-an", "-f", "mp4", dest],
-                       capture_output=True, text=True, timeout=240)
-    except Exception as e:
-        return "capture failed: %s" % e
-    if not os.path.exists(dest) or os.path.getsize(dest) < 50000:
+                        "-an", "-f", "mp4", str(partial)],
+                        capture_output=True, text=True, timeout=240)
+        if rendered.returncode != 0 or not partial.is_file() or partial.stat().st_size < 50000:
+            raise RuntimeError("ffmpeg capture failed")
+        os.replace(partial, dest)
+    except Exception:
+        try:
+            partial.unlink()
+        except OSError:
+            pass
         return "capture failed"
     _reseed()
     return "captured a snippet into %s" % category
 
 
 def _which(name):
+    """Path for an external tool, or its bare name to let the shell resolve it."""
     from shutil import which
     return which(name) or name
 
 
 def _reseed():
+    """Scan ASSET_ROOT and register any files that landed since the last scan.
+
+    The registry is the source of truth for playback, so anything downloaded
+    here must be seeded before it can air; upsert_playable makes this idempotent.
+    """
     from bumparr import seed
     seed.seed_from_assets()
 
 
 def _fetch_archive(identifier, category, reseed=True):
+    """Pull a usable MP4 (smallest first, 512kb preferred, <150MB) from an
+    archive.org item into `category`. Returns the same "added..." message
+    contract as _download_video."""
     try:
         m = _gj("https://archive.org/metadata/%s" % identifier)
-    except Exception as e:
-        return "archive lookup failed: %s" % e
+    except Exception:
+        log.exception("archive lookup failed for requested item")
+        return "archive lookup failed"
     files = m.get("files", [])
     mp4 = None
     for f in sorted(files, key=lambda f: (0 if f.get("name", "").endswith("_512kb.mp4") else 1)):
@@ -248,11 +309,11 @@ def _loc_search(keywords, category, want=3):
 def _already_have(category, stem):
     """True if a file for this item is already in the category — so repeated pulls
     skip what's there and keep expanding variety instead of overlapping."""
-    d = os.path.join(ASSET, category)
-    if not os.path.isdir(d):
+    d = paths.resolve_kind_dir(ASSET, category)
+    if d is None or not d.is_dir():
         return False
-    stem = re.sub(r"[^\w.\-]", "_", stem)
-    return any(f.startswith(stem) for f in os.listdir(d))
+    stem = paths.safe_filename(stem)
+    return any(f.name.startswith(stem) for f in d.iterdir())
 
 
 def _pexels_search(keywords, category, want=2):
@@ -267,7 +328,8 @@ def _pexels_search(keywords, category, want=2):
         "https://api.pexels.com/videos/search?per_page=50&query=" + urllib.parse.quote(q),
         headers={"Authorization": key, **UA})
     try:
-        vids = json.load(urllib.request.urlopen(req, timeout=25)).get("videos", [])
+        with urllib.request.urlopen(req, timeout=25) as response:
+            vids = json.load(response).get("videos", [])
     except Exception:
         return []
     pulled = []
@@ -367,9 +429,21 @@ def _wikimedia_search(keywords, category, want=2):
 
 
 def _test_cors(m3u8):
+    """Whether this HLS endpoint will play directly in a browser.
+
+    Only `Access-Control-Allow-Origin: *` counts — same-origin players and
+    server-side fetches work without CORS, so a weaker answer would misclassify
+    the feed as direct and break playback. When False, the feed goes through
+    the same-origin proxy instead.
+    """
     try:
-        r = urllib.request.urlopen(urllib.request.Request(m3u8, headers=UA), timeout=12)
-        return r.headers.get("Access-Control-Allow-Origin") == "*"
+        # Reuse the proxy's validating fetcher so an ask-bar URL cannot probe
+        # loopback/metadata services or escape through an unsafe redirect.
+        from contextlib import closing
+
+        from bumparr import stream_proxy
+        with closing(stream_proxy._fetch(m3u8, None)) as response:
+            return response.headers.get("Access-Control-Allow-Origin") == "*"
     except Exception:
         return False
 
@@ -396,7 +470,8 @@ def _model_intent(text):
                            "chat_template_kwargs": {"enable_thinking": False}}).encode()
         req = urllib.request.Request(base.rstrip("/") + "/chat/completions", data=body,
                                      headers={"Content-Type": "application/json"})
-        d = json.load(urllib.request.urlopen(req, timeout=60))
+        with urllib.request.urlopen(req, timeout=60) as response:
+            d = json.load(response)
         content = d["choices"][0]["message"].get("content") or ""
         mt = re.search(r"\{.*\}", content, re.DOTALL)
         if mt:
@@ -419,6 +494,13 @@ OPEN_COLLECTIONS = {
 
 
 def _license_ok(doc):
+    """Conservative license gate for archive.org search results.
+
+    An item passes if it declares a public-domain/Creative-Commons license OR
+    lives in a collection that is open by curation (see OPEN_COLLECTIONS).
+    When in doubt it fails, because re-sourcing a clip is cheap and re-licensing
+    a channel is not.
+    """
     lic = (doc.get("licenseurl") or "").lower()
     if "publicdomain" in lic or "creativecommons" in lic:
         return True
@@ -434,6 +516,11 @@ STOP = set("a an the of to in on at is are was were and or but for with from thi
 
 
 def _keywords(text):
+    """Search-worthy words out of a freeform request (stopwords removed).
+
+    Falls back to the raw words if the request is ALL stopwords — "give me some
+    stuff" is still a request the user meant to make.
+    """
     words = re.findall(r"[a-zA-Z][a-zA-Z'-]{2,}", text.lower())
     kw = [w for w in words if w not in STOP]
     return kw or words
@@ -457,15 +544,21 @@ VINTAGE_HINTS = ("vintage", "old", "retro", "classic", "1920", "1930", "1940", "
 
 DEFAULT_COUNT = 3
 MAX_COUNT = 15
+MAX_DOWNLOAD_MB = int(config.env("MAX_DOWNLOAD_MB", "500"))
 
 
 def _extract_count(text):
     """Pull a requested clip count from the text ('5 golf clips', 'pull 8 rain').
     Returns None if unspecified. Capped at MAX_COUNT to stay polite to sources/disk."""
-    m = re.search(r"\b(\d{1,2})\b", text)
-    if not m:
-        return None
-    return max(1, min(MAX_COUNT, int(m.group(1))))
+    patterns = (
+        r"\b(?:pull|get|fetch|download|add)\s+(\d{1,2})\b",
+        r"\b(\d{1,2})(?:\s+[a-z][a-z'-]*){0,3}\s+(?:clips?|videos?|images?|items?|pieces?|footage)\b",
+    )
+    for pattern in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            return max(1, min(MAX_COUNT, int(m.group(1))))
+    return None
 
 
 def _theme_search(text, count=DEFAULT_COUNT):
@@ -500,13 +593,17 @@ def _theme_search(text, count=DEFAULT_COUNT):
         s = _gj("https://archive.org/advancedsearch.php?q=%s&fl[]=identifier&fl[]=title&fl[]=licenseurl&fl[]=collection&rows=25&output=json"
                 % urllib.parse.quote(q))
         docs = s.get("response", {}).get("docs", [])
-    except Exception as e:
-        return "search failed: %s" % e
+    except Exception:
+        log.exception("archive search failed")
+        return "search failed"
     if not docs:
         return "no archive.org matches for that — try different words or paste a URL"
     # Relevance guard: the title should contain at least one of the keywords.
+    # archive.org's ranking is loose and surfaces popular-but-unrelated items
+    # for short queries; this is the cheap first filter before the license gate.
     kwset = set(kw)
     def relevant(d):
+        """True if the result's title contains at least one request keyword."""
         t = (d.get("title") or "").lower()
         return not kwset or any(k in t for k in kwset)
     pulled, skipped_license, skipped_rel = [], 0, 0
@@ -536,6 +633,16 @@ def _theme_search(text, count=DEFAULT_COUNT):
         return ("found %d archive matches but they weren't clearly free to use, and Wikimedia "
                 "had nothing — paste a specific link if you know it's PD." % skipped_license)
     return "nothing clean found for that on archive.org or Wikimedia — try different words or a URL"
+
+
+# Medium nouns / pull verb marking explicit footage intent: "pull 5 storm weather
+# clips" must pull storm footage, not a weather-data card.
+_FOOTAGE_NOUN = re.compile(r"\b(?:clips?|footage|videos?)\b", re.IGNORECASE)
+
+
+def _footage_intent(text):
+    """Return true only for an explicit media noun or requested clip count."""
+    return bool(_FOOTAGE_NOUN.search(text) or _extract_count(text) is not None)
 
 
 def handle(text):
@@ -569,8 +676,13 @@ def handle(text):
 
     # 2a) weather DATA request -> live weather card (distinct from weather footage).
     #     "weather", "weather in Tokyo", "weather at my destination / home".
+    #     Footage intent vetoes this branch: "pull 5 storm weather clips" pulls
+    #     storm footage via theme search, never a weather card.
     wm = re.search(r"weather(?:\s+(?:in|for|at))?\s+(.+)$", low)
-    if "weather" in low and ("in " in low or "for " in low or " at " in low or low.strip() in ("weather", "current weather")):
+    if ("weather" in low
+            and ("in " in low or "for " in low or " at " in low
+                 or low.strip() in ("weather", "current weather"))
+            and not _footage_intent(text)):
         place = None
         if wm:
             place = wm.group(1).strip()
@@ -619,6 +731,12 @@ PROCEDURAL = {
 
 
 def _register_procedural(kind):
+    """Register the built-in procedural cards for a kind (standby bars, static).
+
+    These are pure payload — no file, no model — so they are the cheapest way a
+    fresh install gets content in a kind. Idempotent by content hash, so
+    re-running on startup never duplicates them.
+    """
     items = PROCEDURAL.get(kind)
     if not items:
         return "no procedural set for %s" % kind
@@ -645,10 +763,16 @@ _CARD_SEEDS = None
 
 
 def _load_card_seeds():
+    """Lazily load config_files/card_seeds.json, cached for the process.
+
+    A missing/broken file degrades to "no seeds" rather than crashing startup,
+    because the seeds are a floor of content, not a dependency of the engine.
+    """
     global _CARD_SEEDS
     if _CARD_SEEDS is None:
         try:
-            _CARD_SEEDS = json.load(open(_CARD_SEEDS_FILE, encoding="utf-8"))
+            with open(_CARD_SEEDS_FILE, encoding="utf-8") as f:
+                _CARD_SEEDS = json.load(f)
         except Exception as e:
             print("[bumparr] card seeds unavailable: %s" % e)
             _CARD_SEEDS = {}
@@ -690,8 +814,8 @@ def register_all_baselines():
     # no factual cards at all until someone thinks to generate some, which made
     # the model-free pool look like comedy-only.
     try:
-        from bumparr.generators.grounded import gen_number
-        total += gen_number(12)
+        from bumparr.generators.grounded import register_number_baseline
+        total += register_number_baseline(12)
     except Exception as e:
         print("[bumparr] grounded numbers unavailable:", e)
     return total
@@ -703,11 +827,20 @@ def _weather_card(place):
     try:
         from bumparr.generators import weather
         return weather.generate(location)
-    except Exception as e:
-        return "weather lookup failed: %s" % e
+    except Exception:
+        log.exception("weather lookup failed")
+        return "weather lookup failed"
 
 
 def _generate_cards(kind):
+    """Get more cards of a kind, via the right producer for that kind.
+
+    Routing: procedural kinds register their built-ins; grounded kinds
+    (trivia/fun_facts/number) and on_this_day run their source-backed
+    generators; model kinds fall back to the model-free starter seeds first and
+    only then spend inference — so a no-model install always gets something.
+    Returns a human message for the caller (ask-bar / API) to show.
+    """
     if kind in PROCEDURAL:
         return _register_procedural(kind)
     grounded = {"trivia", "fun_facts", "number"}
@@ -730,5 +863,6 @@ def _generate_cards(kind):
                                capture_output=True, text=True, timeout=300)
         out = (r.stdout or r.stderr).strip().split("\n")[-1]
         return "generated more %s cards — %s" % (kind, out)
-    except Exception as e:
-        return "generation failed: %s" % e
+    except Exception:
+        log.exception("card generation failed for %s", kind)
+        return "generation failed"

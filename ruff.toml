@@ -1,0 +1,10 @@
+# The repo's lint contract. CI runs `ruff check bumparr tests` with exactly
+# this file, so a clean local run means a clean CI run. The rule set is
+# deliberately narrow: undefined names and dead imports are the two classes
+# that have shipped real bugs here (see docs/FIX_PLAN.md Phase 5). Widen it
+# in its own change, with the resulting fixes, not as a side effect.
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = ["F401", "F821"]

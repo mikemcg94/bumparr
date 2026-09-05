@@ -1,5 +1,16 @@
 # Wiring Bumparr into your channel
 
+## Contents
+
+- [The three ways out](#the-three-ways-out)
+- [Filling a gap](#filling-a-gap-the-part-nothing-else-does)
+- [ErsatzTV](#ersatztv)
+- [Tunarr](#tunarr)
+- [Dispatcharr](#dispatcharr)
+- [Anything else](#anything-else)
+- [Keeping the pool fresh](#keeping-the-pool-fresh)
+- [Notes](#notes)
+
 Bumparr produces bumpers. It does not decide what airs or when — that is your
 channel generator's job. This is how to hand its output to one.
 
@@ -8,7 +19,7 @@ sits behind a reverse proxy, set `PUBLIC_URL` to the address your *consumers*
 reach, because the playlist hands out absolute URLs to a separate player process
 that has no idea where the playlist came from.
 
-```
+```dotenv
 PUBLIC_URL=https://bumpers.example.com
 ```
 
@@ -17,7 +28,7 @@ PUBLIC_URL=https://bumpers.example.com
 | Endpoint | Gives you | Use it when |
 |---|---|---|
 | `GET /playlist.m3u` | M3U of every playable bumper, absolute URLs | Your tool ingests a playlist |
-| `GET /api/bumpers/random` | One bumper, JSON | You want to pick one yourself |
+| `GET /api/bumpers/random` | Up to `count` bumpers (default 5), JSON | You want to pick some yourself |
 | `GET /api/bumpers/fill?seconds=N` | A *set* that adds up to N seconds | You have a gap to fill |
 
 The third one is the interesting one, and the reason Bumparr exists.
@@ -30,7 +41,7 @@ Ask for a duration and Bumparr hands back bumpers that add up to it:
 curl 'http://bumparr:8780/api/bumpers/fill?seconds=47'
 ```
 
-```
+```text
 seconds=47&tolerance=1.5&max_items=8&types=video,card
 ```
 
@@ -63,6 +74,10 @@ If you would rather not share a filesystem, add `http://bumparr:8780/playlist.m3
 as a playlist source instead — just make sure `PUBLIC_URL` is set so the URLs
 resolve from ErsatzTV's container.
 
+The live channel can also be added as a stream source
+(`/station/live/index.m3u8`) for a "Bumparr TV" channel alongside the
+file-based filler.
+
 ## Tunarr
 
 Tunarr also does flex/filler natively.
@@ -73,16 +88,32 @@ Tunarr also does flex/filler natively.
    content.
 3. Set flex to fill the gap rather than pad with a static image.
 
+The live channel can also be added as a stream source
+(`/station/live/index.m3u8`) for a "Bumparr TV" channel alongside the
+file-based filler.
+
 ## Dispatcharr
 
-Dispatcharr is stream-oriented, so the playlist is the natural seam:
+Dispatcharr relays live streams; it does not schedule files, so a playlist
+of bumper files is not useful to it. Bumparr therefore runs its pool **as a
+live channel**, and Dispatcharr consumes that like any provider.
 
-```
-http://bumparr:8780/playlist.m3u
-```
+1. **Add the channel.** Sources → M3U: `http://bumparr:8780/station/channel.m3u`.
+   Two streams appear in the `Bumparr` group: the live channel and standby.
+2. **Add the guide.** Sources → EPG: `http://bumparr:8780/station/guide.xml`.
+   The `tvg-id`s match, so the guide assigns itself.
+3. **Use standby as failover.** On any channel whose provider drops, add
+   `http://bumparr:8780/station/standby/index.m3u8` as the **last** stream.
+   Dispatcharr rotates onto it when everything above it fails, and the
+   viewer sees a branded "please stand by" loop instead of a dead stream.
 
-Add it as an M3U source and refresh on whatever interval you like — the
-playlist is generated live, so new bumpers appear without touching config.
+`PUBLIC_URL` must be the address Dispatcharr's container can reach, because
+segment URLs in the playlist are absolute.
+
+The channel's character by hour comes from `config_files/dayparts.yaml`;
+what standby may air comes from `STANDBY_KINDS`. Until the first conform
+sweep finishes the playlist returns 503; the dashboard's Station panel shows
+progress and has a "Conform now" button.
 
 ## Anything else
 
@@ -92,7 +123,7 @@ If your tool speaks neither M3U nor local files, drive it from the API:
 # what's in the pool
 curl http://bumparr:8780/api/status
 
-# one bumper as JSON
+# up to five bumpers as JSON (set ?count=N to choose)
 curl http://bumparr:8780/api/bumpers/random
 
 # fill a 30-second gap with video only
@@ -113,7 +144,7 @@ curl -X POST http://bumparr:8780/api/generate/psa
 # render text cards to video files
 curl -X POST http://bumparr:8780/api/render/cards
 
-# drop dead entries / revive ones marked unhealthy
+# remove file debris / revive items marked unhealthy
 curl -X POST http://bumparr:8780/api/pool/tidy
 curl -X POST http://bumparr:8780/api/pool/revive
 ```
@@ -124,9 +155,12 @@ MP4s; a consumer that reads the API can use them directly.
 
 ## Notes
 
-- **The cams that ship enabled are open direct-HLS feeds** — no key, no
-  scraping, genuinely live. YouTube-backed snapshot cams are supported but ship
-  disabled; enable them yourself in `bumparr/config_files/live_cams.yaml` if you
-  want them (`yt-dlp` is already installed for it).
-- **A local model is optional.** Grounded cards, procedural kinds, and a
-  built-in starter set all work with no model configured. See the README.
+> [!NOTE]
+> **The cams that ship enabled are open direct-HLS feeds** — no key, no
+> scraping, genuinely live. YouTube-backed snapshot cams are supported but ship
+> disabled; enable them yourself in `bumparr/config_files/live_cams.yaml` if you
+> want them (`yt-dlp` is already installed for it).
+
+> [!TIP]
+> **A local model is optional.** Grounded cards, procedural kinds, and a
+> built-in starter set all work with no model configured. See the [README](../README.md).

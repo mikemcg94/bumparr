@@ -6,8 +6,8 @@ generators pull verified content from public APIs so the channel never states a
 confident falsehood. The model is not in the loop here at all.
 
 Usage:
-    python -m backend.generators.grounded --kind trivia    --n 30
-    python -m backend.generators.grounded --kind fun_facts --n 25
+    python -m bumparr.generators.grounded --kind trivia    --n 30
+    python -m bumparr.generators.grounded --kind fun_facts --n 25
 """
 import argparse
 import hashlib
@@ -19,20 +19,29 @@ import time
 import urllib.request
 
 from bumparr import config, db
-from bumparr.card_validation import validate_card, looks_truncated
+from bumparr.card_validation import looks_truncated, validate_card
 
 UA = {"User-Agent": "bumparr/1.0"}
 
 
 def _get_json(url):
-    return json.load(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=25))
+    """GET a URL and parse the body as JSON, with the app's user agent."""
+    with urllib.request.urlopen(
+            urllib.request.Request(url, headers=UA), timeout=25) as response:
+        return json.load(response)
 
 
-def _insert(c, kind, payload, title, weight=0.9):
+def _insert_result(c, kind, payload, title, weight=0.9):
+    """Validate then insert one grounded card, idempotently by content hash.
+
+    The hash-based id means the same fact re-fetched tomorrow is the same row,
+    so repeated runs expand the pool instead of duplicating it. Returns one of
+    ``added``, ``duplicate``, or ``rejected`` for outcome accounting.
+    """
     clean, reason = validate_card(kind, payload)
     if clean is None:
         print("  reject %s: %s" % (kind, reason))
-        return False
+        return "rejected"
     payload = clean
     pj = json.dumps(payload, sort_keys=True)
     pid = "card:%s:%s" % (kind, hashlib.md5(pj.encode()).hexdigest()[:12])
@@ -44,23 +53,37 @@ def _insert(c, kind, payload, title, weight=0.9):
         (pid, "card", kind, "grounded", None, config.CARD_DEFAULT_DURATION,
          title[:80], pj, "grounded", weight, time.time()),
     )
-    return c.total_changes > before
+    return "added" if c.total_changes > before else "duplicate"
+
+
+def _insert(c, kind, payload, title, weight=0.9):
+    return _insert_result(c, kind, payload, title, weight) == "added"
 
 
 def gen_trivia(n):
     """Verified multiple-choice trivia from the Open Trivia DB (no key)."""
-    added = 0
+    added = duplicates = rejected = fetch_errors = 0
+    requests = 0
+    cap = max(n * 4, 10)
     with db.conn() as c:
-        while added < n:
+        while added < n and requests < cap:
+            requests += 1
             batch = min(30, n - added)
             try:
                 d = _get_json("https://opentdb.com/api.php?amount=%d&type=multiple" % batch)
             except Exception as e:
-                print("  opentdb error:", e); break
+                fetch_errors += 1
+                print("  opentdb error:", e)
+                time.sleep(5)
+                continue
             for r in d.get("results", []):
-                q = html.unescape(r["question"])
-                correct = html.unescape(r["correct_answer"])
-                opts = [html.unescape(x) for x in r["incorrect_answers"]] + [correct]
+                try:
+                    q = html.unescape(r["question"])
+                    correct = html.unescape(r["correct_answer"])
+                    opts = [html.unescape(x) for x in r["incorrect_answers"]] + [correct]
+                except (KeyError, TypeError, ValueError):
+                    rejected += 1
+                    continue
                 # shuffle deterministically by hashing so the answer isn't always last
                 opts.sort(key=lambda s: hashlib.md5((q + s).encode()).hexdigest())
                 letters = ["A", "B", "C", "D"][:len(opts)]
@@ -68,10 +91,17 @@ def gen_trivia(n):
                 ans_letter = letters[opts.index(correct)]
                 payload = {"lines": lines, "answer": "%s  %s" % (ans_letter, correct),
                            "reveal_after": 9, "source": "Open Trivia DB"}
-                if _insert(c, "trivia", payload, q):
+                result = _insert_result(c, "trivia", payload, q)
+                if result == "added":
                     added += 1
+                elif result == "duplicate":
+                    duplicates += 1
+                else:
+                    rejected += 1
             c.commit()
             time.sleep(5)  # opentdb rate limit
+        print("  trivia: added=%d duplicate=%d rejected=%d fetch-error=%d requests=%d/%d"
+              % (added, duplicates, rejected, fetch_errors, requests, cap))
     return added
 
 
@@ -116,27 +146,42 @@ def gen_fun_facts(n):
 _NUMBER_DATA = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "config_files", "number_facts.json"))
 
 
-def gen_number(n):
+def _number_facts():
     """True number facts from a vendored, verified dataset. No model, no
     fabrication -- the model-invented number kind produced physically absurd
     values, so numbers are grounded like trivia and fun_facts."""
-    import random
     try:
-        facts = json.load(open(_NUMBER_DATA, encoding="utf-8"))["facts"]
+        with open(_NUMBER_DATA, encoding="utf-8") as fh:
+            facts = json.load(fh)["facts"]
     except Exception as e:
         print("  number facts unavailable:", e)
+        return []
+    return list(facts)
+
+
+def _insert_numbers(facts, limit=None):
+    if limit is not None and limit <= 0:
         return 0
-    random.shuffle(facts)
     added = 0
     with db.conn() as c:
         for f in facts:
-            if added >= n:
-                break
             payload = {"number": str(f["number"]), "meaning": str(f["meaning"]),
                        "reveal_after": 5}
             if _insert(c, "number", payload, str(f["number"])):
                 added += 1
+                if limit is not None and added >= limit:
+                    break
     return added
+
+
+def register_number_baseline(n=12):
+    """Attempt the same deterministic baseline candidates on every startup."""
+    return _insert_numbers(_number_facts()[:max(0, n)])
+
+
+def gen_number(n):
+    """Explicitly scan past duplicates to add up to ``n`` new facts."""
+    return _insert_numbers(_number_facts(), limit=max(0, n))
 
 
 GENERATORS = {"trivia": gen_trivia, "fun_facts": gen_fun_facts, "number": gen_number}

@@ -1,0 +1,42 @@
+# Docker build context. The Dockerfile copies only requirements.txt and
+# bumparr/, but everything under the context is still sent to the daemon.
+# A developer who has run locally has data/ and assets/ at the repo root
+# (see .gitignore), which is the entire media library plus the SQLite DB.
+
+# VCS and editor state
+.git
+.gitignore
+.github
+.DS_Store
+.superpowers
+
+# Python build/cache/venv (Docker matches patterns from the context root,
+# so nested caches need the **/ prefix)
+**/__pycache__
+**/*.py[cod]
+*.egg-info
+.venv*
+venv*
+.ruff_cache
+.pytest_cache
+.mypy_cache
+
+# Runtime data: the deployer's, never the image's
+data
+assets
+*.db
+*.db-wal
+*.db-shm
+.cache
+
+# Not part of the runtime image
+docs
+tests
+CHANGELOG.md
+CONTRIBUTING.md
+README.md
+LICENSE
+docker-compose.yml
+Dockerfile
+.env
+.env.example

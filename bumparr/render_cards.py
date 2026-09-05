@@ -15,20 +15,21 @@ card whose answer simply cuts in reads as a glitch.
 Render is offline and idempotent: a card with a fresh file on disk is skipped.
 Nothing here runs in the playback path.
 """
+import hashlib
 import json
 import math
 import os
-import random
 import shutil
 import subprocess
 import tempfile
 import time
-import urllib.request
+import uuid
+from contextlib import closing
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from bumparr import config, db
+from bumparr import config, db, ffmpeg_pipe
 
 # ---------------------------------------------------------------- geometry --
 # The reference player sizes everything in `vmin`. At 1920x1080 one vmin is
@@ -55,6 +56,7 @@ BRAND_MARGIN_TOP = 2.0 * VMIN
 
 FADE_REVEAL = 0.6           # .reveal transition
 FADE_BRAND = 1.0            # .brand-reveal transition
+_BG_MAX = 64 * 1024 * 1024
 
 # Category labels, mirroring CARD_LABELS in the reference player.
 CARD_LABELS = {
@@ -133,9 +135,11 @@ def _resolve_font_file(name, fallbacks):
 
 
 def _load(path, size):
+    """Pillow font at `size`, degrading to the built-in default rather than
+    failing a whole render because one face is missing or unreadable."""
     if path:
         try:
-            return ImageFont.truetype(path, int(round(size)))
+            return ImageFont.truetype(path, round(size))
         except Exception:
             pass
     return ImageFont.load_default()
@@ -241,6 +245,8 @@ class Block:
     """One laid-out run of text: the unit the vertical centring works on."""
 
     def __init__(self, lines, font, size, fill, track=0.0, lh=1.25, layer="base"):
+        """Pre-measure a run of lines so layout (and its height) is known
+        before drawing; `layer` marks which transparency layer it lands on."""
         self.lines, self.font, self.size = lines, font, size
         self.fill, self.track, self.lh = fill, track, lh
         self.layer = layer            # base | reveal | brand
@@ -302,18 +308,52 @@ def _bg_image(url):
     """Fetch and cache a card background. Returns a cover-cropped RGB image."""
     if not url:
         return None
+    from bumparr import stream_proxy
+    origin = stream_proxy._origin(url)
+    if origin is None:
+        return None
     cache = Path(config.ASSET_ROOT) / _BG_CACHE
     cache.mkdir(parents=True, exist_ok=True)
-    key = "".join(ch if ch.isalnum() else "_" for ch in url)[-120:]
+    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
     local = cache / (key + ".img")
+    partial = local.with_name(".%s.%s.part" % (key, uuid.uuid4().hex))
     try:
         if not local.is_file() or local.stat().st_size == 0:
-            req = urllib.request.Request(url, headers={"User-Agent": "Bumparr/1.0"})
-            with urllib.request.urlopen(req, timeout=25) as r, open(local, "wb") as fh:
-                shutil.copyfileobj(r, fh)
-        img = Image.open(local).convert("RGB")
+            # Background sources may redirect to a separate public CDN. The
+            # shared fetcher still rejects credentials, non-HTTP schemes and
+            # every private/special address on each redirect.
+            with closing(stream_proxy._fetch(url, None)) as r, partial.open("xb") as fh:
+                try:
+                    declared = int(r.headers.get("Content-Length") or 0)
+                except (AttributeError, TypeError, ValueError):
+                    declared = 0
+                if declared > _BG_MAX:
+                    raise ValueError("background image exceeds size cap")
+                total = 0
+                while True:
+                    chunk = r.read(min(262144, _BG_MAX + 1 - total))
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > _BG_MAX:
+                        raise ValueError("background image exceeds size cap")
+                    fh.write(chunk)
+            # Decode before promotion so a corrupt response never poisons cache.
+            with Image.open(partial) as check:
+                check.verify()
+            os.replace(partial, local)
+        with Image.open(local) as source:
+            img = source.convert("RGB")
     except Exception as e:
         print("  bg fetch failed (%s): %s" % (url[:60], e))
+        try:
+            local.unlink()
+        except OSError:
+            pass
+        try:
+            partial.unlink()
+        except OSError:
+            pass
         return None
     # CSS background-size: cover; background-position: center.
     scale = max(W / img.width, H / img.height)
@@ -321,6 +361,45 @@ def _bg_image(url):
                      Image.LANCZOS)
     left, top = (img.width - W) // 2, (img.height - H) // 2
     return img.crop((left, top, left + W, top + H))
+
+
+def prune_bg_cache(max_age_days=30, max_bytes=2 * 1024 ** 3):
+    """Evict background-cache files older than `max_age_days`, then oldest-first
+    until the cache fits `max_bytes`. Returns the number of files removed."""
+    cache = Path(config.ASSET_ROOT) / _BG_CACHE
+    if not cache.is_dir():
+        return 0
+    entries = []
+    for f in cache.iterdir():
+        if not f.is_file():
+            continue
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        entries.append([st.st_mtime, st.st_size, f])
+    removed = 0
+    cutoff = time.time() - max_age_days * 86400
+    for e in entries:
+        if e[0] < cutoff:
+            try:
+                e[2].unlink()
+                removed += 1
+                e[1] = 0
+            except OSError:
+                pass
+    live = sorted((e for e in entries if e[1] > 0 and e[2].exists()))
+    total = sum(e[1] for e in live)
+    for _, size, f in live:
+        if total <= max_bytes:
+            break
+        try:
+            f.unlink()
+            removed += 1
+            total -= size
+        except OSError:
+            pass
+    return removed
 
 
 def _scrim(img):
@@ -435,6 +514,11 @@ def _zone():
 
 
 def _now_parts(epoch, tz):
+    """Wall-clock datetime for `epoch` in the configured zone (host zone if none).
+
+    Kept as a tiny indirection so the clock card's time is computed once, the
+    same way, in every frame of its render.
+    """
     from datetime import datetime
     return datetime.fromtimestamp(epoch, tz) if tz else datetime.fromtimestamp(epoch)
 
@@ -452,6 +536,8 @@ def _frames_station_id(payload, brand, card_font, brand_font, duration):
     tag_f = _load(card_font, 2.6 * VMIN)
 
     def frame(t):
+        """One frame of this station ID at time t: ground, logo, and tag,
+        animated per the chosen style's keyframes."""
         img = Image.new("RGB", (W, H), bg)
         d = ImageDraw.Draw(img)
         # progress through each style's keyframes
@@ -506,6 +592,8 @@ def _frames_dead_air(payload, brand, card_font, brand_font, duration):
     show_at = max(1.0, duration - 2.0)
 
     def frame(t):
+        """One frame of the dead-air card: black, with the corner brand
+        easing in during the final two seconds."""
         img = Image.new("RGB", (W, H), (0, 0, 0))
         a = min(1.0, max(0.0, (t - show_at) / 1.2))
         if a > 0:
@@ -532,6 +620,11 @@ def _frames_local_time(payload, brand, card_font, brand_font, duration):
     tz = _zone()
 
     def frame(t):
+        """One frame of the clock card, advancing the wall clock with t.
+
+        The whole clip walks real time frame by frame, which is what makes the
+        rendered file truthful for its short TTL instead of a frozen clock.
+        """
         now = _now_parts(base_epoch + t, tz)
         img = Image.new("RGB", (W, H), (4, 6, 10))
         d = ImageDraw.Draw(img)
@@ -579,6 +672,9 @@ def _frames_weather(payload, brand, card_font, brand_font, duration):
     items_spec = [it for it in items_spec if it[0]]
 
     def frame(t):
+        """One frame of the weather card. Static for the whole clip — the data
+        was fetched at render time and the card carries a TTL, so it is
+        re-rendered (not re-animated) when it goes stale."""
         img = bg.copy()
         d = ImageDraw.Draw(img)
         for y, text, font, fill, tr in _column(d, items_spec, 1.0 * VMIN):
@@ -643,10 +739,21 @@ def _compose_technical_difficulties(payload, brand, card_font, brand_font):
 
 # ----------------------------------------------------------------- encoding --
 def _music_bed(payload):
+    """Resolve a card's optional music bed (payload.music, relative to
+    ASSET_ROOT) to a file path, or None. Missing files degrade to silence
+    rather than failing the render."""
     m = payload.get("music")
     if not m:
         return None
-    p = Path(config.ASSET_ROOT) / m
+    if Path(m).is_absolute():
+        return None
+    root = Path(config.ASSET_ROOT).resolve()
+    try:
+        p = (root / m).resolve()
+        if not p.is_relative_to(root):
+            return None
+    except (OSError, ValueError):
+        return None
     return str(p) if p.is_file() else None
 
 
@@ -698,9 +805,16 @@ def _encode(dest, base, reveal, brand_img, duration, reveal_at, brand_at, music)
                 "-pix_fmt", "yuv420p", "-r", "30",
                 "-movflags", "+faststart", str(dest)]
 
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if r.returncode != 0:
-            raise RuntimeError((r.stderr or "")[-600:])
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if r.returncode != 0:
+                raise RuntimeError((r.stderr or "")[-600:])
+        except Exception:
+            try:
+                Path(dest).unlink()
+            except OSError:
+                pass
+            raise
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -711,7 +825,7 @@ def _encode_frames(dest, frame_fn, duration, music=None, fps=30):
     Frames go over a pipe rather than to disk: a 10s 1080p card is ~300 frames,
     which is gigabytes as PNGs and nothing at all as a stream.
     """
-    n = max(1, int(round(duration * fps)))
+    n = max(1, round(duration * fps))
     cmd = ["ffmpeg", "-y", "-loglevel", "error",
            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "%dx%d" % (W, H),
            "-r", str(fps), "-i", "-"]
@@ -731,30 +845,14 @@ def _encode_frames(dest, frame_fn, duration, music=None, fps=30):
         cmd.insert(cmd.index("-af") + 1,
                    "volume=0.35,afade=out:st=%.2f:d=0.6" % max(0.0, duration - 0.6))
 
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE)
-    try:
+    def frames():
         for i in range(n):
             img = frame_fn(i / float(fps))
             if img.mode != "RGB":
                 img = img.convert("RGB")
-            proc.stdin.write(img.tobytes())
-    except (BrokenPipeError, ValueError):
-        pass                      # ffmpeg exited early; its stderr has the reason
-    finally:
-        try:
-            proc.stdin.close()
-        except Exception:
-            pass
-        # Do NOT use communicate() here: it flushes stdin, which we just closed,
-        # and the resulting ValueError masks whatever ffmpeg actually said.
-        proc.stdin = None
-    err = proc.stderr.read() or b""
-    proc.stderr.close()
-    proc.wait(timeout=600)
-    if proc.returncode != 0:
-        raise RuntimeError(err.decode("utf-8", "ignore")[-600:] or
-                           "ffmpeg exited %s" % proc.returncode)
+            yield img.tobytes()
+
+    ffmpeg_pipe.encode_frames(cmd, frames(), dest, timeout=600, tail=600)
 
 
 def _encode_noise(dest, caption_img, duration, music=None, fps=30):
@@ -787,9 +885,16 @@ def _encode_noise(dest, caption_img, duration, music=None, fps=30):
                 "-shortest", "-c:v", "libx264", "-preset", "medium", "-crf", "22",
                 "-pix_fmt", "yuv420p", "-r", str(fps),
                 "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(dest)]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if r.returncode != 0:
-            raise RuntimeError((r.stderr or "")[-600:])
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if r.returncode != 0:
+                raise RuntimeError((r.stderr or "")[-600:])
+        except Exception:
+            try:
+                Path(dest).unlink()
+            except OSError:
+                pass
+            raise
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -831,26 +936,35 @@ def render_one(row, card_font, brand_font, brand, force=False):
         return "cached", rel
 
     music = _music_bed(payload)
+    partial = dest.with_name(".%s.%s.part.mp4" % (dest.stem, uuid.uuid4().hex))
+    try:
+        if kind in ANIMATED_BUILDERS:
+            frame_fn = ANIMATED_BUILDERS[kind](payload, brand, card_font, brand_font, duration)
+            _encode_frames(partial, frame_fn, duration, music)
+        elif kind == "technical_difficulties" and payload.get("variant") == "static":
+            # caption only; ffmpeg supplies the grain underneath it
+            _encode_noise(partial, _td_caption(payload, brand, card_font), duration, music)
+        elif kind == "technical_difficulties":
+            img = _compose_technical_difficulties(payload, brand, card_font, brand_font)
+            blank = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            _encode(partial, img, blank, blank, duration, duration + 1,
+                    duration + 1, music)
+        else:
+            base, rev, bmg, reveal_at, brand_at = _compose(
+                kind, payload, row["title"], duration, card_font, brand_font, brand)
+            if not reveal_at:
+                reveal_at = duration + 1        # nothing to reveal: never fires
+            _encode(partial, base, rev, bmg, duration, reveal_at, brand_at, music)
 
-    if kind in ANIMATED_BUILDERS:
-        frame_fn = ANIMATED_BUILDERS[kind](payload, brand, card_font, brand_font, duration)
-        _encode_frames(dest, frame_fn, duration, music)
-    elif kind == "technical_difficulties" and payload.get("variant") == "static":
-        # caption only; ffmpeg supplies the grain underneath it
-        _encode_noise(dest, _td_caption(payload, brand, card_font), duration, music)
-    elif kind == "technical_difficulties":
-        img = _compose_technical_difficulties(payload, brand, card_font, brand_font)
-        blank = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        _encode(dest, img, blank, blank, duration, duration + 1, duration + 1, music)
-    else:
-        base, rev, bmg, reveal_at, brand_at = _compose(
-            kind, payload, row["title"], duration, card_font, brand_font, brand)
-        if not reveal_at:
-            reveal_at = duration + 1        # nothing to reveal: never fires
-        _encode(dest, base, rev, bmg, duration, reveal_at, brand_at, music)
-
-    if not dest.is_file() or dest.stat().st_size == 0:
-        raise RuntimeError("ffmpeg produced no output")
+        if not partial.is_file() or partial.stat().st_size == 0:
+            raise RuntimeError("ffmpeg produced no output")
+        os.replace(partial, dest)
+    except Exception:
+        try:
+            partial.unlink()
+        except OSError:
+            pass
+        raise
     return "rendered", rel
 
 

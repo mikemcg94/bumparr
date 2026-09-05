@@ -47,7 +47,7 @@ curl -X POST http://localhost:8780/api/render/cards   # re-render to video
 |---|---|---|
 | `psa`, `corrections`, `coming_up`, `achievements` | `{"lines": [...]}` | Free text. Absurd is the point. |
 | `tiny_games` | `{"lines": ["prompt", "option A", "option B"]}` | An either/or. **Do not** add an `answer` for a preference question. |
-| `trivia` | `{"lines": ["question", "A ...", "B ..."], "answer": "B"}` | Options must be labelled; the answer maps to a letter. |
+| `trivia` | `{"lines": ["question", "A ...", "B ..."], "answer": "B"}` | Unlabelled options are auto-labelled A–F; mixed/inconsistent labels are rejected; the answer maps to a letter. |
 | `number` | `{"number": "8,848.86 m", "meaning": "Height of Mount Everest"}` | Must be a real, checkable figure. |
 | `technical_difficulties` | `{"text": "PLEASE STAND BY", "variant": "bars"}` | `variant` is `bars`, `static`, or `nosignal`. |
 
@@ -93,7 +93,7 @@ curl -X POST 'http://localhost:8780/api/generate/psa?n=20'
 `bumparr/generators/cards.py`, one per kind. That is where the voice of your
 channel actually lives — if the generated cards don't sound like your station,
 change the prompt, not the model. Generated cards go through the same
-validation, so a model that drifts into nonsense on a factual kind gets caught.
+structural validation, so malformed model output is rejected per item.
 
 Kinds a model can write: `psa`, `corrections`, `coming_up`, `achievements`,
 `tiny_games`.
@@ -142,5 +142,7 @@ sqlite3 data/bumparr.db "UPDATE playables SET enabled=0 WHERE id='card:psa:...';
 sqlite3 data/bumparr.db "UPDATE playables SET enabled=0 WHERE kind='numbers_station';"
 ```
 
-Disabling rather than deleting keeps the card out of rotation without losing it,
-and `POST /api/pool/tidy` cleans up entries whose media has gone missing.
+Disabling rather than deleting keeps the card out of rotation without losing it.
+On startup, the asset scan parks missing local media and clears stale rendered-
+card URIs so they can be rebuilt; `POST /api/pool/tidy` removes zero-byte files
+and empty directories.

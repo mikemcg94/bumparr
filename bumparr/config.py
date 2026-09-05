@@ -8,19 +8,25 @@ happens to answer at that IP on the user's network.
 import os
 from pathlib import Path
 
+
 # Settings are plain, function-named env vars: LLM_BASE, ASSET_ROOT,
-# SHARE_STREAM, and so on. No prefix, no product or personal name in any
-# variable -- a setting is just its function.
+# WINDOW_REFRESH_HOURS, and so on. No prefix, no product or personal name in
+# any variable -- a setting is just its function. Full reference: docs/CONFIG.md.
 def env(name, default=""):
+    """Read one setting from the environment, with its default.
+
+    The single accessor every setting goes through (see docs/CONFIG.md for
+    the full reference); a blank-but-set variable is still a value, so an
+    explicit empty override is honored rather than replaced by the default.
+    """
     v = os.environ.get(name)
     return v if v is not None else default
 
 
 _here = Path(__file__).resolve().parent
-_repo = _here.parent  # repo root (parent of bumparr/)
-_root = _here.parent
+_root = _here.parent  # repo root (parent of bumparr/)
 
-# Where bumper assets live. On Tower this is the staged share; the backend reads
+# Where bumper assets live. Point this at your bumper library; the backend reads
 # video files from here and serves them under /media.
 ASSET_ROOT = Path(env("ASSET_ROOT", "/assets"))
 
@@ -29,12 +35,10 @@ DB_PATH = env("DB_PATH", str(_root / "data" / "bumparr.db"))
 
 FRONTEND_DIR = Path(env("FRONTEND", str(_here)))  # secondary font search path
 
-# Local, self-hosted model endpoint used to GENERATE text-card bumpers
-# (trivia / PSAs / unexplained numbers). Any OpenAI-compatible endpoint you
-# point it at. Card *content* is produced by this model, never hand-authored.
-# OPTIONAL. Blank means no model is configured and card generation is simply
-# unavailable, which is the correct default: the user points this at their own
-# inference endpoint, local or cloud. Never ship a real address here.
+# Optional OpenAI-compatible endpoint used only to diversify invented card
+# kinds (PSAs, corrections, achievements, coming-up, tiny games). Factual kinds
+# are grounded and every invented kind has model-free seeds, so blank is fully
+# supported. Never ship a real deployment address here.
 LOCAL_LLM_BASE = env("LLM_BASE", "").strip()
 LOCAL_LLM_MODEL = env("LLM_MODEL", "").strip()
 
@@ -57,7 +61,6 @@ COOLDOWN_MAX = int(env("COOLDOWN_MAX", "400"))
 # stale as one never played, so nothing was ever meaningfully overdue.
 RECENCY_HORIZON = float(env("RECENCY_HORIZON", "21600"))  # 6h
 RECENCY_MAX_BOOST = float(env("RECENCY_MAX_BOOST", "6.0"))
-DEFAULT_VIDEO_DURATION = float(env("DEFAULT_VIDEO_DUR", "30"))
 CARD_DEFAULT_DURATION = float(env("CARD_DUR", "14"))
 STREAM_DEFAULT_DURATION = float(env("STREAM_DUR", "45"))   # live "window" is FORCED off after this
 # Hard cap: no video overstays its welcome. A 3-minute clip still cuts away here,
@@ -128,3 +131,17 @@ MIN_VIDEO_ASPECT = float(env("MIN_VIDEO_ASPECT", "0.95"))
 
 # Playable types the system understands. 'stream' == live webcam / "window".
 PLAYABLE_TYPES = ("video", "card", "stream", "image")
+
+# The station: the pool run as a live channel (see docs/superpowers/specs/
+# 2026-09-05-station-playout-design.md). Segment length is also the keyframe
+# cadence divisor (GOP is 2s, so 4s segments always start on a keyframe).
+STATION_SEGMENT_SECONDS = int(env("STATION_SEGMENT_SECONDS", "4"))
+STATION_WINDOW_SEGMENTS = int(env("STATION_WINDOW_SEGMENTS", "6"))
+STATION_CONFORM_INTERVAL = int(env("STATION_CONFORM_INTERVAL", "300"))   # 0 disables
+STATION_CONFORM_TIMEOUT = int(env("STATION_CONFORM_TIMEOUT", "600"))
+STATION_BITRATE_K = int(env("STATION_BITRATE_K", "4000"))
+# What the standby channel may air: the material that reads as "we know, hold
+# on" rather than programming. Window captures are in because a live view of
+# somewhere is the classic hold pattern.
+STANDBY_KINDS = tuple(k.strip() for k in env(
+    "STANDBY_KINDS", "technical_difficulties,station_id,dead_air,window").split(",") if k.strip())

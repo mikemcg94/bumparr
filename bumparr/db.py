@@ -1,6 +1,7 @@
 """SQLite storage: the playable registry, channel playout cursor, and play history."""
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from bumparr import config
@@ -39,16 +40,41 @@ CREATE INDEX IF NOT EXISTS idx_history_chan ON play_history(channel_id, played_a
 """
 
 
+@contextmanager
 def conn():
+    """A new SQLite connection with the pragmas the shared DB needs.
+
+    A 15s busy timeout because the database is genuinely shared — the
+    app, the CLI modules run as subprocesses, and (in combined deploys) a
+    player can all touch it, and every write path here is short and atomic.
+    The context commits on success, rolls back on error, and always closes.
+    """
     Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(config.DB_PATH, timeout=10)
-    c.row_factory = sqlite3.Row
-    c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA busy_timeout=15000")
-    return c
+    try:
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA busy_timeout=15000")
+        with c:
+            yield c
+    finally:
+        c.close()
 
 
 def init_db():
+    """Create the schema if needed and run additive migrations.
+
+    Idempotent and safe to call from every entry point (app startup, each
+    CLI module) because CREATE IF NOT EXISTS plus the migration check make
+    repeated calls no-ops on an existing database.
+    """
+    Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    # WAL is persistent database state; set it once during initialization,
+    # before normal short-lived connections begin sharing the file.
+    initial = sqlite3.connect(config.DB_PATH, timeout=10)
+    try:
+        initial.execute("PRAGMA journal_mode=WAL")
+    finally:
+        initial.close()
     with conn() as c:
         c.executescript(SCHEMA)
         _migrate(c)

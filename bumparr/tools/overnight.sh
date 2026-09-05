@@ -28,18 +28,21 @@ echo "=== START $(date -Is) ==="
 echo "--- phase 1: generate text cards ---"
 # Model-written kinds go to cards.py; grounded and dated kinds have their own
 # generators. Routing mirrors /api/generate so both paths stay in step.
-for kind in psa number trivia corrections achievements coming_up tiny_games; do
+for kind in psa corrections achievements coming_up tiny_games; do
   echo "[cards] $kind (model)"
   timeout 900 python3 -m bumparr.generators.cards --kind "$kind" --n 12 2>&1 | tail -2
   sleep 3
 done
-for kind in trivia fun_facts; do
+for kind in trivia fun_facts number; do
   echo "[cards] $kind (grounded)"
   timeout 900 python3 -m bumparr.generators.grounded --kind "$kind" --n 12 2>&1 | tail -2
   sleep 3
 done
 echo "[cards] on_this_day"
 timeout 900 python3 -m bumparr.generators.on_this_day --n 12 2>&1 | tail -2
+
+echo "--- phase 1.5: enrich eligible cards with CC0/public-domain backgrounds ---"
+timeout 900 python3 -m bumparr.generators.enrich_bg 2>&1 | tail -8
 
 echo "--- phase 2: render every unrendered card to MP4 ---"
 timeout 5400 python3 -m bumparr.render_cards 2>&1 | tail -6
@@ -50,9 +53,10 @@ echo "--- phase 3: quarry source video into branded clips ---"
 timeout 21600 python3 -m bumparr.produce --per-source 5 --seed 19 2>&1 | tail -40
 
 echo "--- phase 4: final counts (read-only) ---"
+# The service's own DB_PATH, not a hardcoded deployment path (see CONTRIBUTING).
 python3 -c "
-import sqlite3
-c=sqlite3.connect('/data/miketv.db')
+import os, sqlite3
+c=sqlite3.connect(os.environ.get('DB_PATH', '/data/bumparr.db'))
 for r in c.execute(\"SELECT type, COUNT(*) n FROM playables WHERE enabled=1 AND health='ok' GROUP BY type\"):
     print('  %-7s %d' % r)
 print('  TOTAL', c.execute(\"SELECT COUNT(*) FROM playables WHERE enabled=1 AND health='ok'\").fetchone()[0])

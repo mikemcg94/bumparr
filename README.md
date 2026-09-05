@@ -1,5 +1,7 @@
 # Bumparr
 
+![CI](https://github.com/mikemcg94/bumparr/actions/workflows/ci.yml/badge.svg?branch=main) ![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)
+
 **A bumper generator for the \*arr stack.** Point it at your sources and it builds
 and maintains a self-refreshing pool of TV bumpers / interstitials — station IDs,
 "please stand by" cards, trivia, live "window" cams, public-domain clips, ambient
@@ -13,15 +15,21 @@ produces the interstitials; something downstream decides what airs and when.
 ## Run it
 
 ```bash
-cp .env.example .env      # set your storage paths (optional; sane defaults)
+cp .env.example .env      # optional; all settings have safe defaults
 docker compose up -d
 # dashboard: http://localhost:8780
 ```
 
-Runs as its own service on port `8780`, next to the rest of your stack.
+Runs as its own service on port `8780`, next to the rest of your stack. By
+default, Docker-managed `bumparr-assets` and `bumparr-data` volumes persist the
+library and database and work on a clean checkout. To use host directories,
+set `ASSETS` and `DATA` in `.env`; the container runs as UID/GID `10001`, so
+those bind mounts must be writable by that identity (for example,
+`sudo chown -R 10001:10001 /path/to/assets /path/to/data`).
 
-> **Note:** The live cams that ship enabled are open, direct-HLS feeds — no key,
-> no scraping, genuinely real-time. Bumparr can *also* capture YouTube-backed
+> [!NOTE]
+> The live cams that ship enabled are open, direct-HLS feeds — no key, no
+> scraping, genuinely real-time. Bumparr can *also* capture YouTube-backed
 > cams, but ships none enabled: whether to scrape YouTube is your call to make
 > for your own install, not this project's to make for you. See
 > `bumparr/config_files/live_cams.yaml` for a commented template.
@@ -55,7 +63,7 @@ Video, stream and image bumpers are files (or live URLs) the moment they land.
 rendered before anything outside Bumparr can play them:
 
 ```bash
-curl -X POST http://localhost:8780/api/render/cards          # or --limit N in batches
+curl -X POST 'http://localhost:8780/api/render/cards?limit=N' # optional batch limit
 docker compose exec bumparr python -m bumparr.render_cards   # same thing, with progress
 ```
 
@@ -65,8 +73,8 @@ cards are skipped, so it is safe to run on a schedule after generating new ones.
 Until a card is rendered it stays out of `/playlist.m3u` and its `media_url` is
 `null`, which is deliberate: Bumparr never advertises something a consumer cannot play.
 
-Two kinds are intentionally never rendered. `weather` and `local_time` display live
-values, so a frozen file would air stale data; they remain player-only.
+Time-sensitive `weather` and `local_time` cards are rendered too, then refreshed
+automatically on their configured TTLs so file-based consumers do not air stale data.
 
 ## Consume it
 
@@ -77,10 +85,15 @@ Three ways for a channel generator or player to pull bumpers:
 | `GET /api/bumpers/random?count=N&max_duration=S&types=video,card` | Hand me N bumpers to drop between shows |
 | `GET /playlist.m3u` | An M3U of every playable bumper (video, stream, rendered cards) for IPTV tooling |
 | `GET /media/<path>` | The actual media files |
+| `GET /station/channel.m3u` + `/station/guide.xml` | Bumparr as a live channel (Dispatcharr, or any HLS player); `/station/standby/index.m3u8` as a failover stream |
 
 Plus `GET /api/status`, `GET /api/bumpers`, `POST /api/render/cards`, and
 `POST /api/generate/<kind>` / `POST /api/sources/<action>` to drive it from the
 dashboard or scripts.
+
+> [!CAUTION]
+> Bumparr ships with no auth — the dashboard and every POST/DELETE endpoint are
+> open to whoever can reach the port, so keep it off the open internet.
 
 Every URL Bumparr hands out is absolute, because the thing that fetches a playlist
 is rarely the thing that plays its entries. Behind a reverse proxy, set
@@ -92,11 +105,22 @@ adds up to a gap — solved as a subset-sum rather than a greedy pass, so a brea
 doesn't end in dead air. That is the contract a channel generator actually
 needs, and nothing else in the \*arr ecosystem offers it.
 
-**→ [Wiring Bumparr into your channel](docs/INTEGRATION.md)** — concrete setup
-for ErsatzTV, Tunarr and Dispatcharr.
+The station is the pool run as a live channel: pre-conformed segments and a playlist, no encoder in the playback path.
 
-**→ [Making the cards yours](docs/CARDS.md)** — write your own, edit the model
-prompts that give your channel its voice, or add a new card kind.
+## Documentation
+
+| Doc | What it covers |
+|---|---|
+| [docs/INTEGRATION.md](docs/INTEGRATION.md) | wiring Bumparr into ErsatzTV, Tunarr, Dispatcharr |
+| [docs/CARDS.md](docs/CARDS.md) | making the cards yours: shapes per kind, model prompts, new kinds |
+| [docs/API.md](docs/API.md) | the full endpoint reference, incl. the dashboard |
+| [docs/CONFIG.md](docs/CONFIG.md) | every environment variable and its default |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how the pipeline fits together, and the invariants to keep |
+| [docs/ROTATION.md](docs/ROTATION.md) | the scoring model and how to tune variety |
+| [docs/STATION.md](docs/STATION.md) | running the pool as a live channel: conform, the two channels, dayparts, the guide, standby failover |
+| [docs/SCHEMA.md](docs/SCHEMA.md) | the database: every column, the card lifecycle, id conventions |
+| [docs/CLI.md](docs/CLI.md) | every `python -m` module, flags, and the overnight batch |
+| [docs/RENDERING.md](docs/RENDERING.md) | the card-rendering pipeline, volatile cards, TTLs |
 
 ## The pool maintains itself
 

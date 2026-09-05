@@ -5,10 +5,9 @@ sub-directory: ambient/, station_ids/, test_patterns/, ephemeral/). Card and
 stream playables are added by their own generators/adapters, not here.
 """
 import subprocess
-import time
 from pathlib import Path
 
-from bumparr import config, db
+from bumparr import config, db, paths
 
 VIDEO_EXT = {".mp4", ".webm", ".ogv", ".m4v", ".mkv"}
 
@@ -39,6 +38,7 @@ CATEGORY = {
 
 
 def _probe_duration(path):
+    """Positive duration via ffprobe, or None for unreadable media."""
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -46,39 +46,76 @@ def _probe_duration(path):
             capture_output=True, text=True, timeout=30,
         ).stdout.strip()
         d = float(out)
-        return d if d > 0 else config.DEFAULT_VIDEO_DURATION
+        return d if d > 0 else None
     except Exception:
-        return config.DEFAULT_VIDEO_DURATION
+        return None
 
 
 def seed_from_assets():
+    """Scan ASSET_ROOT and register every video file as a playable.
+
+    Idempotent (id is the relative path, upsert_playable ignores existing
+    rows), so it is safe to run on every startup and after every download.
+    Category directory -> (kind, source, weight) via the CATEGORY map; an
+    unknown directory becomes its own self-describing kind. Returns the number
+    of newly registered files.
+    """
     root = config.ASSET_ROOT
     if not root.exists():
         return 0
-    added = 0
+    added = skipped = 0
     with db.conn() as c:
+        registered = {r[0] for r in c.execute("SELECT id FROM playables").fetchall()}
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.suffix.lower() not in VIDEO_EXT:
                 continue
             rel = str(path.relative_to(root))
             if Path(rel).parts[0] in SKIP_DIRS:
                 continue
-            category = path.parent.name
-            # Known category -> its (kind, source, weight); unknown (e.g. a category
-            # created by a natural-language request) -> use the folder name as the kind
-            # so it's self-describing rather than mislabeled "ambient".
-            kind, source, weight = CATEGORY.get(category, (category, "user-added", 0.9))
+            if "vid:" + rel in registered:
+                continue
+            if path.parent == root:
+                kind, source, weight = "unsorted", "user-added", 0.9
+            else:
+                category = path.parent.name
+                # Known category -> its (kind, source, weight); unknown (e.g. a category
+                # created by a natural-language request) -> use the folder name as the kind
+                # so it's self-describing rather than mislabeled "ambient".
+                kind, source, weight = CATEGORY.get(category, (category, "user-added", 0.9))
+            duration = _probe_duration(path)
+            if duration is None:
+                skipped += 1
+                continue
             row = {
                 "id": "vid:" + rel,
                 "type": "video",
                 "kind": kind,
                 "source": source,
                 "uri": rel,
-                "duration": _probe_duration(path),
+                "duration": duration,
                 "title": path.stem.replace("_", " ").replace("~", " ").strip(),
                 "weight": weight,
             }
             if db.upsert_playable(c, row):
                 added += 1
+        parked = cleared = 0
+        for r in c.execute(
+                "SELECT id, type, uri, enabled FROM playables WHERE uri IS NOT NULL").fetchall():
+            uri = r["uri"]
+            if (not uri or r["type"] == "stream"
+                    or uri.startswith(("http://", "https://"))):
+                continue
+            path = paths.resolve_media(uri)
+            if path is None or path.is_file():
+                continue
+            if r["type"] == "card":
+                c.execute("UPDATE playables SET uri=NULL WHERE id=?", (r["id"],))
+                cleared += 1
+            elif r["type"] in ("video", "image"):
+                c.execute("UPDATE playables SET enabled=0, health='dead' WHERE id=?",
+                          (r["id"],))
+                parked += 1
         c.commit()
+    print("[seed] %d new, %d unreadable skipped, %d parked, %d card renders cleared"
+          % (added, skipped, parked, cleared))
     return added

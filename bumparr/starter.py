@@ -26,8 +26,10 @@ STOCK_DELAY = 1.5
 
 
 def load_seeds(path=SEEDS_FILE):
+    """The seed list from starter_seeds.yaml; [] on any read error (a broken
+    seed file should skip seeding, not crash the app that triggered it)."""
     try:
-        doc = yaml.safe_load(Path(path).read_text()) or {}
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     except Exception as e:
         print("[starter] could not read %s: %s" % (path, e))
         return []
@@ -35,10 +37,18 @@ def load_seeds(path=SEEDS_FILE):
 
 
 def _have_keys():
+    """Whether the stock-footage sources (Pexels/Pixabay) can be queried."""
     return bool(config.PEXELS_API_KEY or config.PIXABAY_API_KEY)
 
 
 def run(limit=None, dry_run=False, only_free=False):
+    """Execute the shipped starter seeds through the same ingest.handle path
+    the dashboard ask-bar uses, with polite spacing between pulls.
+
+    Opt-in by design (see module docstring); dry_run lists without touching
+    the network, only_free skips entries that need stock-API keys. Returns
+    [(query, result_message)] for the caller to report.
+    """
     seeds = load_seeds()
     if limit:
         seeds = seeds[:limit]

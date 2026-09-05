@@ -1,5 +1,81 @@
 # Changelog
 
+## Unreleased
+
+Security + correctness pass (plan: [docs/FIX_PLAN.md](docs/FIX_PLAN.md)).
+
+**Station**
+- The pool now runs as two live HLS channels, `live` and `standby`, with a
+  channel M3U and an XMLTV guide, so Dispatcharr can carry Bumparr as a
+  channel and use standby as branded failover. Items are conformed once
+  into splice-safe segments by a background job; nothing encodes at serve
+  time.
+- The playout is the first writer of play history: `last_played`,
+  `play_count` and `play_history` now move, which wakes the recency,
+  affinity and fatigue factors.
+- Dayparts (`config_files/dayparts.yaml`): time-of-day windows as a
+  rotation factor and as the guide's programme blocks.
+- New settings: `STATION_*`, `STANDBY_KINDS` (see CONFIG.md).
+- Conform cache keys now include the active output profile and still duration;
+  branding changes invalidate the slate, and old renditions remain available
+  until their replacements successfully land.
+- Status polling is side-effect free, reconnect staleness follows the last HLS
+  playlist request, and zero-score seasonal/daypart candidates stay off air.
+- MPEG-TS station segments are served explicitly as `video/mp2t` on every
+  supported Python/OS MIME database.
+
+**Security**
+- Stream proxy: per-cam signed tokens, same-origin/CDN allowlist with redirect
+  validation, and bounded reads (closes a local-file/SSRF primitive).
+- Archive fetch + ingest: metadata filenames are sanitized and contained,
+  downloads are capped on actual bytes and landed atomically.
+- Media deletes resolve through one contained resolver (escapes delete the row
+  only); the container runs as non-root with a `/healthz` healthcheck.
+- Dashboard builds server-derived content with DOM APIs rather than HTML strings.
+
+**Correctness**
+- Contained deletes preserve symlink entries instead of resolving filesystem
+  operations onto their targets; staging and archive temporary names remain
+  valid even when source metadata reaches filesystem component limits.
+- Generic `get`/`fetch` weather requests remain weather-data cards unless an
+  explicit media noun or clip count asks for footage; dashboard actions keep
+  polling until the server reports a terminal state.
+- `/api/bumpers` honors bounded `limit`/`offset`; `/random` returns up to
+  `count` (default 5); M3U keeps commas inside quoted titles; `status`
+  accumulates `by_kind` across types.
+- Trivia auto-labels bare options and rejects mixed labels; weather refresh
+  preserves stats/uri/operator tuning; the number baseline is idempotent
+  across restarts; `seasons` is report-only without `--apply`.
+- `resolve_cams` was removed (snapshot/direct cams in `live_cams.yaml` are the
+  maintained path); dashboard search now covers the full registry server-side.
+
+**Recovery**
+- `POST /api/pool/revive` now clears a park it can verify: rows the asset sweep
+  retired (`enabled=0, health='dead'`) return to rotation when `ffprobe` can
+  still read the file. It previously restored `health` alone, and rotation
+  requires both, so a parked row stayed dark permanently.
+- `POST /api/pool/enable` un-parks one named item — the way back for a live cam
+  parked when its entry left `live_cams.yaml`, which has no local file to
+  verify. Restoring one is ordered: re-add to the YAML, reload, then enable,
+  because the loader parks what is unconfigured but never re-enables what is.
+- `/api/bumpers` accepts `?enabled=`, and the dashboard gains a parked-only
+  filter and a per-card enable control, so finding a parked item no longer
+  means reading ids out of a JSON page.
+- Date-rotated cards are excluded from the revive sweep, and enabling one by
+  name warns rather than refuses; a single payload matcher now backs the
+  rotation, the generator quota, and that warning, so they cannot disagree.
+- `prune --drop-category` names every unregistered file it will delete while
+  previewing, and compares paths by real directory and entry name so a
+  symlinked media root stops reporting registered files twice.
+
+**Ops**
+- Default Compose storage now uses writable Docker-managed volumes, so a clean
+  checkout starts under the non-root UID without host-directory ownership work.
+- CI runs `compileall`, ResourceWarning-strict tests, targeted Ruff, JavaScript
+  syntax/DOM tests, and a clean-checkout Compose build/start/write smoke step;
+  compose warns the `:ro` dev mount shadows release pins.
+- Assumes a trusted LAN: no auth on the dashboard or the POST/DELETE endpoints.
+
 ## v0.1.0 — first public release
 
 First release. A bumper generator for the *arr stack: point it at source media

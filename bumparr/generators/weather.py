@@ -11,7 +11,6 @@ Usage:
 import argparse
 import hashlib
 import json
-import os
 import time
 import urllib.parse
 import urllib.request
@@ -35,10 +34,16 @@ WMO = {
 
 
 def _gj(url):
-    return json.load(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=20))
+    """GET a URL and parse the body as JSON (Open-Meteo calls)."""
+    with urllib.request.urlopen(
+            urllib.request.Request(url, headers=UA), timeout=20) as response:
+        return json.load(response)
 
 
 def _geocode(name):
+    """Resolve a place name to {label, lat, lon} via Open-Meteo geocoding, or
+    None. The label includes the first admin region so 'Portland' on the card
+    says which Portland it is."""
     d = _gj("https://geocoding-api.open-meteo.com/v1/search?count=1&name=" + urllib.parse.quote(name))
     res = (d.get("results") or [])
     if not res:
@@ -51,6 +56,14 @@ def _geocode(name):
 
 
 def generate(location):
+    """Fetch current conditions for `location` and (re)register its weather card.
+
+    One card per place, upserted by a hash of the place name: the card is
+    time-sensitive, so a refresh updates content in place rather than adding a sibling
+    or replacing operator/history fields.
+    Returns a human message (used by the ask-bar); the card itself carries the
+    payload the renderer draws (city/temp/conditions/emoji/wind/humidity).
+    """
     loc = _geocode(location)
     if not loc:
         return "couldn't find location: %s" % location
@@ -72,12 +85,14 @@ def generate(location):
     }
     pid = "card:weather:" + hashlib.md5(loc["label"].encode()).hexdigest()[:12]
     with db.conn() as c:
-        # weather is time-sensitive: refresh the card for the same place. OR REPLACE
-        # is atomic (a DELETE+INSERT can race the shared DB and throw UNIQUE errors).
-        c.execute("INSERT OR REPLACE INTO playables (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,last_played,play_count,created_at) "
-                  "VALUES (?,?,?,?,?,?,?,?,?,?,1,'ok',0,0,?)",
-                  (pid, "card", "weather", "grounded", None, 10.0,
-                   loc["label"], json.dumps(payload), "grounded,weather", 0.8, time.time()))
+        # Refresh only content fields; preserve render path, history and tuning.
+        cur = c.execute("UPDATE playables SET title=?, payload=?, duration=? WHERE id=?",
+                        (loc["label"], json.dumps(payload), 10.0, pid))
+        if cur.rowcount == 0:
+            c.execute("INSERT INTO playables (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,last_played,play_count,created_at) "
+                      "VALUES (?,?,?,?,?,?,?,?,?,?,1,'ok',0,0,?)",
+                      (pid, "card", "weather", "grounded", None, 10.0,
+                       loc["label"], json.dumps(payload), "grounded,weather", 0.8, time.time()))
         c.commit()
     return "weather card for %s: %d° %s" % (loc["label"], temp, label)
 
@@ -86,7 +101,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--location", default=config.env("HOME_LOCATION", ""),
                     help="e.g. 'Portland, Oregon'. Required: there is no sensible default location.")
-    ap.add_argument("--n", type=int, default=1)  # accepted for API symmetry; weather is one card/location
     args = ap.parse_args()
     db.init_db()
     print("[weather]", generate(args.location))

@@ -25,6 +25,8 @@ from bumparr.content_filter import weight_for
 
 
 def fetch_events():
+    """Today's events from Wikipedia's on-this-day feed (list of dicts with
+    year/text), or [] if the feed is unreachable."""
     lt = time.localtime()
     url = ("https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/%02d/%02d"
            % (lt.tm_mon, lt.tm_mday))
@@ -33,9 +35,45 @@ def fetch_events():
         return json.load(r).get("events", [])
 
 
-def _today_key():
+def today_key():
+    """Today as MM-DD — the key stamped into each card's payload (for_date)
+    and matched against by is_todays_card."""
     lt = time.localtime()
     return "%02d-%02d" % (lt.tm_mon, lt.tm_mday)
+
+
+def is_todays_card(payload, today=None):
+    """Does this on_this_day payload belong to `today` (MM-DD)?
+
+    The one place that decides, because two callers ask the same question for
+    opposite reasons: the rotation parks every card this says no to, and the
+    /api/pool/enable warning tells the operator which answer their card got.
+    They used to decide separately — the rotation with SQL
+    `LIKE '%"for_date": "MM-DD"%'` against the serialized text, the warning by
+    parsing the JSON — so any payload shape json.dumps' defaults do not produce
+    made them disagree: a compact-serialized card (no space after the colon)
+    was told it "stays on" and parked on the next pass, and a NULL payload was
+    promised a park that never came (`payload NOT LIKE ?` is NULL, not true,
+    for a NULL payload).
+
+    Anything that is not a JSON object stamped with today's `for_date` is not
+    today's card: a NULL, malformed or non-dict payload answers False rather
+    than raising, which is what parks it.
+    """
+    today = today or today_key()
+    if isinstance(payload, (bytes, bytearray)):
+        try:
+            payload = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload or "null")
+        except ValueError:
+            return False
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("for_date") == today
 
 
 def retire_other_days(c, today=None):
@@ -44,27 +82,46 @@ def retire_other_days(c, today=None):
     Disabled rather than deleted, because these come back around: the same card
     is correct again next year on its own date, and regenerating it would just
     re-fetch identical text from Wikipedia.
+
+    Matching is Python-side (is_todays_card), so how the payload was serialized
+    cannot change the answer. Returns (on, off) as before: how many parked cards
+    were switched on, and how many live ones were parked. Rows already in the
+    right state are counted in neither, so `0, 0` still means "nothing moved".
     """
-    today = today or _today_key()
-    on = c.execute(
-        "UPDATE playables SET enabled=1 WHERE kind='on_this_day' "
-        "AND payload LIKE ? AND enabled=0", ('%"for_date": "' + today + '"%',)).rowcount
-    off = c.execute(
-        "UPDATE playables SET enabled=0 WHERE kind='on_this_day' "
-        "AND enabled=1 AND payload NOT LIKE ?", ('%"for_date": "' + today + '"%',)).rowcount
-    return on, off
+    today = today or today_key()
+    rows = c.execute(
+        "SELECT id, payload, enabled FROM playables WHERE kind='on_this_day'").fetchall()
+    on = [r["id"] for r in rows
+          if not r["enabled"] and is_todays_card(r["payload"], today)]
+    off = [r["id"] for r in rows
+           if r["enabled"] and not is_todays_card(r["payload"], today)]
+    if on:
+        c.executemany("UPDATE playables SET enabled=1 WHERE id=?", [(i,) for i in on])
+    if off:
+        c.executemany("UPDATE playables SET enabled=0 WHERE id=?", [(i,) for i in off])
+    return len(on), len(off)
 
 
 def generate(target: int) -> int:
+    """Top up today's on-this-day cards to `target`, then rotate the calendar.
+
+    Grim events pass the shared tone filter (kept but rare). After inserting,
+    calls retire_other_days so only today's cards are enabled — the pool
+    accumulates a year-round calendar that switches itself over at midnight
+    (see the module docstring for why the cards are parked, not deleted).
+    Returns the number of new cards added today.
+    """
     events = fetch_events()
-    today = _today_key()
+    today = today_key()
     added = 0
     with db.conn() as c:
         # Count only TODAY's cards toward the target; yesterday's are parked, not
-        # competing for the quota, or a full pool would block today's batch.
-        have = c.execute(
-            "SELECT COUNT(*) FROM playables WHERE kind='on_this_day' AND payload LIKE ?",
-            ('%"for_date": "' + today + '"%',)).fetchone()[0]
+        # competing for the quota, or a full pool would block today's batch. The
+        # same test the rotation uses, so the quota cannot count a card as
+        # today's that retire_other_days is about to park (or the reverse).
+        have = sum(1 for r in c.execute(
+            "SELECT payload FROM playables WHERE kind='on_this_day'").fetchall()
+            if is_todays_card(r["payload"], today))
         for ev in events:
             if have + added >= target:
                 break

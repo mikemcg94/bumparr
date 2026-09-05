@@ -10,21 +10,20 @@ Re-run on a schedule to keep the windows current. Each cam overwrites its own
 file, so storage stays flat (~11 small mp4s).
 """
 import os
-
-from bumparr import config
 import random
-import sqlite3
+import shutil
 import subprocess
 import time
 
-import shutil
+from bumparr import config, db, paths
 
 YTDLP = shutil.which("yt-dlp") or "yt-dlp"   # installed in the image, on PATH
-OUT = config.env("WINDOWS_DIR", "/assets/windows")
-DB = config.env("DB", "/data/bumparr.db")
+OUT = config.env("WINDOWS_DIR", str(config.ASSET_ROOT / "windows"))
 
 
 def _probe_duration(path):
+    """Duration of a captured snippet; 60s fallback keeps a broken probe from
+    zeroing the row's duration (a 0s playable would break the fill endpoint)."""
     try:
         out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                               "-of", "default=nw=1:nk=1", path], capture_output=True, text=True, timeout=30).stdout.strip()
@@ -40,30 +39,37 @@ def _upsert_window(slug, path):
     pid = "vid:" + rel
     dur = _probe_duration(path)
     try:
-        c = sqlite3.connect(DB, timeout=15)
-        c.execute("PRAGMA busy_timeout=8000")
-        if c.execute("SELECT 1 FROM playables WHERE id=?", (pid,)).fetchone():
-            c.execute("UPDATE playables SET duration=?, health='ok', enabled=1 WHERE id=?", (dur, pid))
-        else:
-            c.execute(
-                "INSERT OR IGNORE INTO playables (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,last_played,play_count,created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,1,'ok',0,0,?)",
-                (pid, "video", "window", "youtube-live", rel, dur,
-                 slug.replace("-", " ").title(), "{}", "live,window", 1.5, time.time()))
-        c.commit(); c.close()
+        with db.conn() as c:
+            if c.execute("SELECT 1 FROM playables WHERE id=?", (pid,)).fetchone():
+                c.execute("UPDATE playables SET duration=?, health='ok' WHERE id=?", (dur, pid))
+            else:
+                c.execute(
+                    "INSERT OR IGNORE INTO playables (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,last_played,play_count,created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,1,'ok',0,0,?)",
+                    (pid, "video", "window", "youtube-live", rel, dur,
+                     slug.replace("-", " ").title(), "{}", "live,window", 1.5, time.time()))
     except Exception as e:
         print("  db update err", slug, e)
 
 # Snapshot cams come from config/live_cams.yaml (user-owned, location-bound) —
 # not hardcoded, so a deployer adds their own local cams without touching code.
 def _load_cams():
+    """[(slug, query)] for every snapshot cam in config_files/live_cams.yaml.
+
+    These are the YouTube-backed cams that get captured to looping snippets,
+    as distinct from the direct-HLS `cams` section that streams live. A config
+    error degrades to "no cams" rather than crashing the refresh loop.
+    """
     # bumparr/config_files/live_cams.yaml (this file is bumparr/sources/capture_windows.py)
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "config_files", "live_cams.yaml")
     try:
         import yaml
-        data = yaml.safe_load(open(path).read()) or {}
-        cams = [(c["slug"], c["query"]) for c in data.get("snapshot_cams", []) if c.get("slug") and c.get("query")]
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f.read()) or {}
+        raw = data.get("snapshot_cams", []) if isinstance(data, dict) else []
+        cams = [(str(c["slug"]), str(c["query"])) for c in raw
+                if isinstance(c, dict) and c.get("slug") and c.get("query")]
         if cams:
             return cams
     except Exception as e:
@@ -75,10 +81,20 @@ CAMS = _load_cams()
 
 
 def capture(slug, query):
+    """Capture one fresh snippet from a cam and atomically swap it into place.
+
+    The whole design is around reliability of an unattended job: stale partial
+    files cleared first, resolve and capture as separate bounded steps, a
+    random short length so the job can't balloon, re-encode to constant frame
+    rate so a stuttering upstream can't bake itself into a permanent bumper,
+    and os.replace so playback never reads a half-written file. Returns True
+    on success.
+    """
     # Capture length. Live capture takes ~real-time, so keep it modest for
     # reliability (11 cams add up); random-segment still varies the shown slice
     # across the refresh cycle. Timeout must exceed the capture length + overhead,
     # or yt-dlp gets killed mid-download and leaves a ".part" that never finalizes.
+    slug = paths.safe_filename(slug, "cam")
     seconds = random.choice([22, 28, 35])
     dest = os.path.join(OUT, "%s.mp4" % slug)
     tmp = os.path.join(OUT, ".%s.tmp.mp4" % slug)
@@ -114,14 +130,21 @@ def capture(slug, query):
         # preserves that broken timing verbatim, and since a capture becomes a
         # permanent bumper the stutter would be baked in forever. Re-encoding to
         # constant frame rate normalises it once, at capture time.
-        subprocess.run(
+        result = subprocess.run(
             ["ffmpeg", "-y", "-rw_timeout", "15000000", "-i", url,
              "-t", str(seconds), "-vsync", "cfr", "-r", "30",
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
              "-pix_fmt", "yuv420p", "-an", "-f", "mp4", tmp],
             capture_output=True, text=True, timeout=seconds + 180)
+        if result.returncode != 0:
+            raise RuntimeError("ffmpeg exited unsuccessfully")
     except Exception as e:
         print("  ffmpeg error", slug, e)
+        for junk in (tmp, tmp + ".part"):
+            try:
+                os.remove(junk)
+            except OSError:
+                pass
         return False
     if os.path.exists(tmp) and os.path.getsize(tmp) > 50000:
         os.replace(tmp, dest)   # atomic swap so the player never sees a half-file
@@ -133,6 +156,7 @@ def capture(slug, query):
 
 
 def main():
+    """Capture every configured window cam once; run on the jobs.py schedule."""
     os.makedirs(OUT, exist_ok=True)
     ok = 0
     for slug, query in CAMS:

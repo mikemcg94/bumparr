@@ -30,6 +30,9 @@ _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
 
 def _subenv():
+    """Environment for child python processes: PYTHONPATH pointed at the repo
+    root so `python -m bumparr...` imports the package from any cwd (the
+    container's WORKDIR is not guaranteed to be the repo root)."""
     e = dict(os.environ)
     e["PYTHONPATH"] = _REPO_ROOT + os.pathsep + e.get("PYTHONPATH", "")
     return e
@@ -48,10 +51,15 @@ def _newest_window_age():
         return None
     if not mp4s:
         return None
-    return time.time() - max(f.stat().st_mtime for f in mp4s)
+    try:
+        return time.time() - max(f.stat().st_mtime for f in mp4s)
+    except OSError:
+        return None
 
 
 def _run_capture():
+    """Run the window-capture module as a child process; errors are logged,
+    never raised, because a flaky capture must not kill the refresh loop."""
     try:
         subprocess.run([sys.executable, "-m", CAPTURE_MODULE], timeout=60 * 30, env=_subenv())
     except Exception as e:
@@ -107,35 +115,131 @@ def _rotate_dated_cards():
         print("[bumparr] dated-card rotation error: %s" % e)
 
 
+async def _dated_once():
+    """One dated-card rotation + seasonal restore pass, each guarded independently.
+
+    Errors are logged, never raised, so a startup DB lock cannot kill the loop.
+    Only CancelledError exits.
+    """
+    try:
+        await asyncio.to_thread(_rotate_dated_cards)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print("[bumparr] dated-card loop error: %s" % e)
+    try:
+        await asyncio.to_thread(_apply_seasons)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print("[bumparr] dated-card loop error: %s" % e)
+
+
 async def dated_card_loop():
     """Re-check date-bound cards hourly, so a midnight rollover is caught."""
     import asyncio
-    await asyncio.to_thread(_rotate_dated_cards)
-    await asyncio.to_thread(_apply_seasons)
+    await _dated_once()
     while True:
         try:
             await asyncio.sleep(3600)
-            await asyncio.to_thread(_rotate_dated_cards)
-            await asyncio.to_thread(_apply_seasons)
+            await _dated_once()
         except asyncio.CancelledError:
             raise
         except Exception as e:
             print("[bumparr] dated-card loop error: %s" % e)
 
 
+async def _refresh_once(initial=False):
+    """One window-refresh cycle: capture (staleness-aware on initial) then fetch queue.
+
+    The two operations are guarded independently so one capture failure never
+    prevents the fetch-queue pass in the same cycle. Only CancelledError exits.
+    """
+    if initial:
+        interval = REFRESH_HOURS * 3600
+        # On startup, only capture if the windows are missing or already stale.
+        age = _newest_window_age()
+        if age is None or age > interval:
+            print("[bumparr] windows missing/stale -> initial capture")
+            try:
+                await asyncio.to_thread(_run_capture)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                print("[bumparr] window capture error: %s" % e)
+        try:
+            await asyncio.to_thread(_run_fetch_queue)   # try any pending PD downloads
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print("[bumparr] fetch queue error: %s" % e)
+        return
+    print("[bumparr] scheduled window refresh")
+    try:
+        await asyncio.to_thread(_run_capture)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print("[bumparr] window capture error: %s" % e)
+    try:
+        await asyncio.to_thread(_run_fetch_queue)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print("[bumparr] fetch queue error: %s" % e)
+
+
 async def window_refresh_loop():
+    """Scheduled re-capture of live-window snippets plus fetch-queue passes.
+
+    Cadence is WINDOW_REFRESH_HOURS; the initial capture on startup is
+    staleness-aware (see _newest_window_age) so a restart of a fresh pool does
+    not re-download every cam for nothing. Disabled entirely with
+    WINDOW_REFRESH=0 for deployments that capture elsewhere.
+    """
     if not ENABLED:
         print("[bumparr] window refresh disabled")
         return
     interval = REFRESH_HOURS * 3600
-    # On startup, only capture if the windows are missing or already stale.
-    age = _newest_window_age()
-    if age is None or age > interval:
-        print("[bumparr] windows missing/stale -> initial capture")
-        await asyncio.to_thread(_run_capture)
-    await asyncio.to_thread(_run_fetch_queue)   # try any pending PD downloads
+    try:
+        await _refresh_once(initial=True)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print("[bumparr] window refresh error: %s" % e)
     while True:
-        await asyncio.sleep(interval)
-        print("[bumparr] scheduled window refresh")
-        await asyncio.to_thread(_run_capture)
-        await asyncio.to_thread(_run_fetch_queue)
+        try:
+            await asyncio.sleep(interval)
+            await _refresh_once(initial=False)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print("[bumparr] window refresh error: %s" % e)
+
+
+async def station_conform_loop():
+    """Keep the station's segment cache in step with the pool.
+
+    Runs a sweep on startup and then every STATION_CONFORM_INTERVAL seconds.
+    Nothing in this loop is in the playback path; the channels serve
+    whatever is conformed and simply gain items as the sweep lands them.
+    """
+    from bumparr import config
+    from bumparr.station import conform, playout
+    interval = config.STATION_CONFORM_INTERVAL
+    if interval <= 0:
+        print("[station] conform loop disabled")
+        return
+    while True:
+        try:
+            stats = await asyncio.to_thread(conform.sweep, None, playout.active_keys())
+            if stats.get("conformed") or stats.get("failed") or stats.get("pruned"):
+                print("[station] conform: %s" % stats)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print("[station] conform loop error: %s" % e)
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            raise
