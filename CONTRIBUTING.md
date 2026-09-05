@@ -23,9 +23,12 @@ time. If you add a card kind, add its rule there and a test.
 ## Setup
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
+# CI and the Docker image run Python 3.12 (see .python-version); the pinned
+# pillow wheel does not build on newer interpreters, so use 3.12 explicitly.
+python3.12 -m venv .venv && . .venv/bin/activate   # or: uv venv --python 3.12 .venv
+pip install -r requirements.txt -r requirements-dev.txt
 python -m unittest discover -s tests -v
+ruff check bumparr tests                            # same rule set CI enforces
 ```
 
 Run it:
@@ -41,7 +44,10 @@ OpenAI-compatible endpoint.
 ## Conventions
 
 - **Settings are plain function-named env vars** — `LLM_BASE`, `ASSET_ROOT`,
-  `SHARE_STREAM`. No prefix, no product name in a variable.
+  `WINDOW_REFRESH_HOURS`. No prefix, no product name in a variable. The
+  complete reference is `docs/CONFIG.md`; when you add or change a setting,
+  update that table and (if it's a commonly-touched one) `.env.example` in
+  the same change.
 - **Nothing personal or branded ships.** No real hostnames, IPs, paths,
   locations, or names in code, comments, or config. The default brand is the
   neutral `TV`.
@@ -49,6 +55,19 @@ OpenAI-compatible endpoint.
   personal-use font is a deployer's config, never a committed file. Same for
   media: Bumparr ships no video, audio, or images.
 - Keep comments about *why*, not *what*.
+- **Docstrings are load-bearing.** Every module and every public function
+  carries one, and they explain the decision, not the mechanics. If you can't
+  write the why, that's a signal to re-read the code, not to skip it.
+- **Docs and code change together.** The reference docs are generated from
+  the same facts as the code, so a behavior change ships with its doc update:
+  endpoints → `docs/API.md`, settings → `docs/CONFIG.md` + `.env.example`,
+  CLI flags → `docs/CLI.md`, schema → `docs/SCHEMA.md`, the scoring model →
+  `docs/ROTATION.md`, card rendering → `docs/RENDERING.md`, station behaviour →
+  `docs/STATION.md`.
+
+- **CI has no ffmpeg/ffprobe.** Any test that reaches a subprocess must mock
+  it; the station tests show the pattern in `tests/test_station_conform.py`'s
+  fake process.
 
 ## Tests
 

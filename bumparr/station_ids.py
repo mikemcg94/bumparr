@@ -13,13 +13,13 @@ television grammar and the smallest useful coin in the drawer.
 import argparse
 import json
 import random
-import subprocess
 import time
+import uuid
 from pathlib import Path
 
 from PIL import Image
 
-from bumparr import brandslam, config, db
+from bumparr import brandslam, config, db, ffmpeg_pipe
 
 # Length bands, in seconds. The short end exists to make exact fills possible;
 # the long end is a proper station ident you can actually read.
@@ -29,8 +29,6 @@ BANDS = [
     (3.0, 6.0),      # standard ident
     (6.0, 12.0),     # long ident, room for the roulette to land and hold
 ]
-
-TAGS = ["", "you are watching", "stay tuned", "we now return you", "this is"]
 
 W, H = 1920, 1080
 FPS = 30
@@ -50,6 +48,8 @@ def _sources():
 
 
 def _cover(img, w=W, h=H):
+    """Scale-and-center-crop to fill the frame (CSS background-size: cover),
+    so any aspect ratio of source still becomes a full-bleed plate."""
     scale = max(w / img.width, h / img.height)
     img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))),
                      Image.LANCZOS)
@@ -63,9 +63,9 @@ def _dim(img, amount=0.55):
     return Image.blend(img, black, amount)
 
 
-def _render_still(dest, plate, brand, spec, duration, static_face=None, tag=""):
+def _render_still(dest, plate, brand, spec, duration, static_face=None):
     """Encode a still-backed ident, rolling the roulette frame by frame."""
-    n = max(1, int(round(duration * FPS)))
+    n = max(1, round(duration * FPS))
     slam_at = 0.0 if duration < 2.0 else min(0.4, duration * 0.2)
     size = 13.0 * (min(W, H) / 100.0)
 
@@ -78,31 +78,16 @@ def _render_still(dest, plate, brand, spec, duration, static_face=None, tag=""):
            "-c:v", "libx264", "-preset", "medium", "-crf", "20",
            "-pix_fmt", "yuv420p", "-r", str(FPS),
            "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(dest)]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE)
-    try:
+    def frames():
         for i in range(n):
             t = i / float(FPS)
             if spec is not None:
                 face = brandslam.face_at(spec, t, slam_at)
             else:
                 face = static_face if t >= slam_at else None
-            frame = brandslam.draw(plate.copy(), brand, face, size)
-            proc.stdin.write(frame.tobytes())
-    except (BrokenPipeError, ValueError):
-        pass
-    finally:
-        try:
-            proc.stdin.close()
-        except Exception:
-            pass
-        proc.stdin = None
-    err = proc.stderr.read() or b""
-    proc.stderr.close()
-    proc.wait(timeout=300)
-    if proc.returncode != 0:
-        raise RuntimeError(err.decode("utf-8", "ignore")[-500:])
-    del tag
+            yield brandslam.draw(plate.copy(), brand, face, size).tobytes()
+
+    ffmpeg_pipe.encode_frames(cmd, frames(), dest, timeout=300, tail=500)
 
 
 def generate(count=60, seed=None, dry_run=False):
@@ -126,13 +111,14 @@ def generate(count=60, seed=None, dry_run=False):
         plate = None
         if stills and (not clips or rng.random() < 0.5):
             try:
-                plate = _dim(_cover(Image.open(rng.choice(stills)).convert("RGB")))
+                with Image.open(rng.choice(stills)) as source:
+                    plate = _dim(_cover(source.convert("RGB")))
             except Exception:
                 plate = None
         if plate is None:
             plate = Image.new("RGB", (W, H), (0, 0, 0))
 
-        pid = "station_id:%d:%d" % (int(time.time()), i)
+        pid = "station_id:%d:%d:%s" % (int(time.time()), i, uuid.uuid4().hex[:8])
         name = "station_ids/%s.mp4" % pid.replace(":", "_")
         dest = Path(config.OUTPUT_DIR) / name
         # Registry uri is the SERVED path, not a filesystem path: produced output
@@ -147,17 +133,26 @@ def generate(count=60, seed=None, dry_run=False):
         except Exception as e:
             print("  FAIL %s: %s" % (rel, str(e)[:160]))
             continue
-        with db.conn() as c:
-            c.execute(
-                """INSERT OR IGNORE INTO playables
-                   (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,created_at)
-                   VALUES (?,?,?,?,?,?,?,?,'',?,1,'ok',?)""",
-                (pid, "video", "station_id", "generated", rel, duration,
-                 "%s ident" % config.BRAND,
-                 json.dumps({"roulette": brandslam.describe(spec), "branded": True,
-                             "brand": config.BRAND}),
-                 1.0, time.time()))
-            c.commit()
+        try:
+            with db.conn() as c:
+                cursor = c.execute(
+                    """INSERT OR IGNORE INTO playables
+                       (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,created_at)
+                       VALUES (?,?,?,?,?,?,?,?,'',?,1,'ok',?)""",
+                    (pid, "video", "station_id", "generated", rel, duration,
+                     "%s ident" % config.BRAND,
+                     json.dumps({"roulette": brandslam.describe(spec), "branded": True,
+                                 "brand": config.BRAND}),
+                     1.0, time.time()))
+                if not cursor.rowcount:
+                    raise RuntimeError("station ID registration was not inserted")
+        except Exception as exc:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+            print("  FAIL %s: %s" % (rel, str(exc)[:160]))
+            continue
         made.append((rel, duration, spec is not None))
         print("  ok  %-40s %5.2fs  %s" % (rel, duration, brandslam.describe(spec)))
     return made

@@ -13,12 +13,13 @@ import os
 import subprocess
 from pathlib import Path
 
-from bumparr import config, db
+from bumparr import config, db, paths
 
 VIDEO_EXT = (".mp4", ".mkv", ".webm", ".m4v", ".mov", ".avi")
 
 
 def aspect(path):
+    """(aspect_ratio, width, height) of a video; (None, 0, 0) if unreadable."""
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
@@ -32,9 +33,76 @@ def aspect(path):
 
 def _resolve(uri):
     """Registry uri -> file on disk, across the source and output trees."""
-    if uri.startswith("bumpers/"):
-        return Path(config.OUTPUT_DIR) / uri[len("bumpers/"):]
-    return Path(config.ASSET_ROOT) / uri
+    return paths.resolve_media(uri)
+
+
+def _same_entry(path):
+    """Compare-only spelling of a path: real directory, literal entry name.
+
+    The two sides of "is this file registered?" are spelled differently on
+    purpose. `paths.resolve_media` returns a lexical path so that deleting an
+    in-tree symlink never follows through to its target, while
+    `paths.resolve_kind_dir` returns a resolved one. That is fine until
+    ASSET_ROOT is itself a symlink — `/assets -> /mnt/user/media` is an
+    ordinary NAS layout — at which point the same file arrives under two names
+    and a registered file reads as an unregistered leftover. Resolving only the
+    directory reconciles the two spellings; keeping the last component literal
+    keeps the symlink distinction the lexical path was there to protect.
+    """
+    p = Path(path)
+    try:
+        return Path(os.path.realpath(p.parent)) / p.name
+    except OSError:
+        return p
+
+
+def _remove_registered(rows, extra_files=()):
+    """Stage files, commit row removals, then purge staged files."""
+    staged = []
+    removed = []
+    try:
+        registered_paths = {_same_entry(row.get("path") or _resolve(row.get("uri") or ""))
+                            for row in rows if row.get("path") or _resolve(row.get("uri") or "")}
+        for extra in extra_files:
+            if _same_entry(extra) in registered_paths or not extra.is_file():
+                continue
+            try:
+                quarantined = paths.stage_delete(extra)
+            except OSError as exc:
+                print("    FAILED %s: staging failed (%s)" % (extra, exc))
+                continue
+            if quarantined is not None:
+                staged.append((extra, quarantined))
+        with db.conn() as c:
+            for row in rows:
+                path = row.get("path") or _resolve(row.get("uri") or "")
+                quarantined = None
+                if path is not None:
+                    try:
+                        quarantined = paths.stage_delete(path)
+                    except OSError as exc:
+                        print("    FAILED %s: staging failed (%s)" %
+                              (row.get("uri", ""), exc))
+                        continue
+                if quarantined is not None:
+                    staged.append((path, quarantined))
+                c.execute("DELETE FROM playables WHERE id=?", (row["id"],))
+                removed.append(row.get("uri"))
+    except Exception:
+        for original, quarantined in reversed(staged):
+            try:
+                paths.restore_delete(original, quarantined)
+            except OSError as exc:
+                print("    CRITICAL restore failure %s: %s" % (original, exc))
+        raise
+    cleanup_failed = 0
+    for _, quarantined in staged:
+        try:
+            paths.finish_delete(quarantined)
+        except OSError as exc:
+            cleanup_failed += 1
+            print("    quarantine retained %s: %s" % (quarantined, exc))
+    return removed, cleanup_failed
 
 
 def find_portrait_videos():
@@ -46,8 +114,8 @@ def find_portrait_videos():
             "AND uri IS NOT NULL AND uri NOT LIKE 'http%'").fetchall()]
     for r in rows:
         path = _resolve(r["uri"])
-        if not path.is_file():
-            continue
+        if path is None or not path.is_file():
+            continue        # remote/stream, or escaping the media trees: not ours to probe
         ar, w, h = aspect(path)
         if ar is not None and ar < config.MIN_VIDEO_ASPECT:
             hits.append({"id": r["id"], "kind": r["kind"], "uri": r["uri"],
@@ -88,56 +156,72 @@ def drop_categories(names, apply=False):
     promise a theme the footage does not deliver, so removing the category
     outright is the right correction rather than weeding it clip by clip.
     """
-    removed, dirs = [], []
-    with db.conn() as c:
-        for name in names:
+    category_dirs = {}
+    for name in names:
+        resolved = [paths.resolve_kind_dir(root, name)
+                    for root in (Path(config.ASSET_ROOT), Path(config.OUTPUT_DIR))]
+        if any(d is None for d in resolved):
+            print("[prune] invalid category: %r" % name)
+            return {"removed": 0, "dirs": 0, "error": "invalid category"}
+        category_dirs[name] = resolved
+    removed, dirs, cleanup_failed = [], [], 0
+    for name in names:
+        with db.conn() as c:
             rows = [dict(r) for r in c.execute(
                 "SELECT id, uri FROM playables WHERE kind=?", (name,)).fetchall()]
-            print("[prune] category %-18s %d registered entr%s"
-                  % (name, len(rows), "y" if len(rows) == 1 else "ies"))
-            for r in rows:
-                path = _resolve(r["uri"] or "")
-                if apply:
-                    try:
-                        if path.is_file():
-                            path.unlink()
-                        c.execute("DELETE FROM playables WHERE id=?", (r["id"],))
-                        removed.append(r["uri"])
-                    except Exception as e:
-                        print("    FAILED %s: %s" % (r["uri"], e))
-                else:
-                    print("    would remove %s" % (r["uri"] or "")[:64])
-            # The source directory goes too, or the next asset scan re-seeds
-            # whatever is left sitting in it.
-            for root in (Path(config.ASSET_ROOT), Path(config.OUTPUT_DIR)):
-                d = root / name
-                if not d.is_dir():
-                    continue
-                if apply:
-                    for f in list(d.iterdir()):
-                        try:
-                            f.unlink()
-                        except Exception:
-                            pass
-                    try:
-                        d.rmdir()
-                        dirs.append(str(d))
-                    except Exception as e:
-                        print("    dir not removed %s: %s" % (d, e))
-                else:
-                    print("    would remove dir %s (%d file(s))" % (d, len(list(d.iterdir()))))
+        print("[prune] category %-18s %d registered entr%s"
+              % (name, len(rows), "y" if len(rows) == 1 else "ies"))
+        extras = [f for d in category_dirs[name] if d.is_dir()
+                  for f in d.iterdir() if f.is_file()]
         if apply:
-            c.commit()
+            try:
+                gone, failed = _remove_registered(rows, extras)
+                removed.extend(gone)
+                cleanup_failed += failed
+            except Exception as exc:
+                print("    category transaction failed: %s" % exc)
+                continue
+        else:
+            registered = {_same_entry(p)
+                          for p in (_resolve(row["uri"] or "") for row in rows) if p}
+            for row in rows:
+                print("    would remove %s" % (row["uri"] or "")[:64])
+            for extra in extras:
+                if _same_entry(extra) not in registered:
+                    print("    would remove unregistered %s" % extra)
+        # Dropping a category takes its whole directory: the registered rows and
+        # any unregistered leftovers were both staged above, so this rmdir is
+        # clearing what is now empty. The dry run lists the leftovers by name —
+        # deleting a file the operator never saw in the preview is the one
+        # outcome this command must not produce.
+        for d in category_dirs[name]:
+            if not d.is_dir():
+                continue
+            if apply:
+                try:
+                    d.rmdir()
+                    dirs.append(str(d))
+                except OSError:
+                    pass
+            else:
+                print("    would remove dir %s" % d)
     if apply:
         print("[prune] removed %d entr%s and %d director%s"
               % (len(removed), "y" if len(removed) == 1 else "ies",
                  len(dirs), "y" if len(dirs) == 1 else "ies"))
     else:
         print("[prune] DRY RUN — nothing deleted. Re-run with --apply.")
-    return {"removed": len(removed), "dirs": len(dirs)}
+    return {"removed": len(removed), "dirs": len(dirs),
+            "cleanup_failed": cleanup_failed}
 
 
 def prune(apply=False, include_orphans=True):
+    """Remove portrait video: registered rows (file + row) and orphan files.
+
+    Dry run by default — this deletes files, and the per-kind summary it
+    prints is how a deployer decides which categories a sweep will hurt.
+    Returns counts for the caller (CLI/API) to report.
+    """
     hits = find_portrait_videos()
     orphans = find_orphan_files() if include_orphans else []
 
@@ -156,17 +240,12 @@ def prune(apply=False, include_orphans=True):
         print("[prune] DRY RUN — nothing deleted. Re-run with --apply.")
         return {"registered": len(hits), "orphans": len(orphans), "deleted": 0}
 
-    deleted = 0
-    with db.conn() as c:
-        for h in hits:
-            try:
-                if h["path"].is_file():
-                    h["path"].unlink()
-                c.execute("DELETE FROM playables WHERE id=?", (h["id"],))
-                deleted += 1
-            except Exception as e:
-                print("    FAILED %s: %s" % (h["uri"], e))
-        c.commit()
+    try:
+        removed, cleanup_failed = _remove_registered(hits)
+    except Exception as exc:
+        print("[prune] transaction failed; registered files restored: %s" % exc)
+        removed, cleanup_failed = [], 0
+    deleted = len(removed)
     for o in orphans:
         try:
             o["path"].unlink()
@@ -174,7 +253,8 @@ def prune(apply=False, include_orphans=True):
         except Exception as e:
             print("    FAILED %s: %s" % (o["uri"], e))
     print("[prune] removed %d file(s) and their registry rows" % deleted)
-    return {"registered": len(hits), "orphans": len(orphans), "deleted": deleted}
+    return {"registered": len(hits), "orphans": len(orphans), "deleted": deleted,
+            "cleanup_failed": cleanup_failed}
 
 
 if __name__ == "__main__":

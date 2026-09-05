@@ -56,7 +56,7 @@ def font_pool(limit=None):
             if f.suffix.lower() in FONT_EXT and f.name not in seen:
                 seen.add(f.name)
                 out.append(f)
-    return out[:limit] if limit else out
+    return out[:limit] if limit is not None else out
 
 
 def roll(rng=None, pool=None, prob=None):
@@ -143,6 +143,7 @@ def plan(duration):
 
 
 def slam_start_for(duration):
+    """When the slam begins for a clip of this duration (the plan's start)."""
     return plan(duration)["start"]
 
 
@@ -200,6 +201,8 @@ def static_face(rng=None, pool=None):
 
 
 def describe(spec):
+    """Human-readable summary of a roll (or 'static slam'), for logs and the
+    provenance recorded in each produced clip's payload."""
     if spec is None:
         return "static slam"
     return "roulette over %d faces, landing on %s" % (

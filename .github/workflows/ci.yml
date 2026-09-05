@@ -9,17 +9,25 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.12"
+          python-version-file: ".python-version"
+          cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Compile check
+        run: python -m compileall -q bumparr
 
       - name: Unit tests
-        run: python -m unittest discover -s tests -v
+        run: python -W error::ResourceWarning -m unittest discover -s tests -v
+
+      # Rule set lives in ruff.toml so local `ruff check` and CI agree.
+      - name: Dead-code and undefined-name check
+        run: ruff check bumparr tests
 
       # The headline promise is that Bumparr runs with no model. This asserts it
       # rather than trusting it: boot the real app with NO model endpoint set and
@@ -54,3 +62,18 @@ jobs:
           ASSET_ROOT: /tmp/ci-assets
         run: |
           python -c "from bumparr.app import app; print('app imports OK')"
+
+      - name: JS syntax check
+        run: |
+          node --check bumparr/web/app.js
+          node --test bumparr/web/app.test.js
+
+      - name: Docker build and clean-checkout Compose smoke
+        run: |
+          project="bumparr-ci-${GITHUB_RUN_ID}"
+          cleanup() { docker compose -p "$project" down -v; }
+          trap cleanup EXIT
+          docker compose -p "$project" up -d --build --wait
+          test "$(docker compose -p "$project" exec -T bumparr id -u)" = 10001
+          docker compose -p "$project" exec -T bumparr python -c \
+            "from pathlib import Path; [p.write_text('ok') for p in (Path('/assets/.write-test'), Path('/data/.write-test'))]; [p.unlink() for p in (Path('/assets/.write-test'), Path('/data/.write-test'))]"

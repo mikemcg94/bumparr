@@ -1,12 +1,14 @@
 # Live cameras — user-owned config. Point this at whatever public live
 # feeds you want (your local DOT traffic cams, harbors, whatever). Each entry:
 #   title:  shown label
+#   id:     stable unique name (required; changing the URL keeps history/settings)
 #   url:    a direct HLS (.m3u8) URL
 #   kind:   webcam (default)
 #   region: freeform tag (e.g. your city/state) for your own organization
 #   direct: true if the stream sends CORS headers (plays in-browser directly);
 #           false routes it through the same-origin proxy.
 #   weight: relative scheduler weight (local cams can be weighted higher)
+#   proxy_hosts: optional list of exact CDN origins/hosts used by child HLS URLs
 #
 # TRUE LIVE requires OPEN HLS. State DOT 511 systems are the best source — many
 # publish direct, no-auth, CORS-open .m3u8. YouTube-backed cams do NOT work as
@@ -18,17 +20,17 @@
 
 # --- LIVE cams: open, direct HLS (genuinely real-time) ---
 cams:
-  - {title: "Live: Louisiana DOT 1", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-002.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
-  - {title: "Live: Louisiana DOT 2", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-005.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
-  - {title: "Live: Louisiana DOT 3", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-009.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
-  - {title: "Live: Louisiana DOT 4", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-013.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
-  - {title: "Live: Louisiana DOT 5", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-017.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
-  - {title: "Live: Louisiana DOT 6", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-021.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+  - {id: louisiana-dot-1, title: "Live: Louisiana DOT 1", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-002.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+  - {id: louisiana-dot-2, title: "Live: Louisiana DOT 2", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-005.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+  - {id: louisiana-dot-3, title: "Live: Louisiana DOT 3", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-009.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+  - {id: louisiana-dot-4, title: "Live: Louisiana DOT 4", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-013.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+  - {id: louisiana-dot-5, title: "Live: Louisiana DOT 5", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-017.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
+  - {id: louisiana-dot-6, title: "Live: Louisiana DOT 6", url: "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-021.streams/playlist.m3u8", kind: webcam, region: louisiana, direct: true, weight: 0.35}
 
 # --- SNAPSHOT cams: OPT-IN, and empty on purpose ------------------------------
 #
 # These resolve a YouTube search to whatever is live right now and capture a
-# fresh ~60-95s clip on a refresh cycle. The capability is built in and works
+# fresh ~22-35s clip on a refresh cycle. The capability is built in and works
 # (it needs `yt-dlp`, which ships in requirements.txt) -- but Bumparr does not
 # ship any YouTube entries enabled by default, for two honest reasons:
 #

@@ -1,5 +1,6 @@
 # Standalone Bumparr — runs next to your *arr stack on its own port.
-# Point the volumes at your storage; edit config_files/ for your cams & fetch queue.
+# Docker-managed volumes work on a clean checkout; set ASSETS/DATA to bind paths
+# when you want the library and database at specific host locations.
 services:
   bumparr:
     build:
@@ -22,12 +23,21 @@ services:
       # Stock-footage keys for the shipped starter seeds (free self-signup).
       - PEXELS_API_KEY=${PEXELS_API_KEY:-}
       - PIXABAY_API_KEY=${PIXABAY_API_KEY:-}
+      - MAX_DOWNLOAD_MB=${MAX_DOWNLOAD_MB:-500}
+      - STREAM_SEGMENT_MAX_MB=${STREAM_SEGMENT_MAX_MB:-64}
+      - ALLOW_PRIVATE_UPSTREAM=${ALLOW_PRIVATE_UPSTREAM:-}
       # Timezone for the clock card; containers are UTC without it.
       - TZ=${TZ:-UTC}
     volumes:
       # Your bumper library (rw so live-cam snippets + fetched PD content can land).
-      - ${ASSETS:-./assets}:/assets:rw
-      - ${DATA:-./data}:/data
-      # Live edits without rebuild (optional; safe to remove for a pinned deploy).
+      - ${ASSETS:-bumparr-assets}:/assets:rw
+      - ${DATA:-bumparr-data}:/data
+      # Live edits without rebuild (optional). WARNING: this :ro mount shadows
+      # the code baked into the image — remove it for release-pinned deploys,
+      # or the running code will not match the image tag.
       - ./bumparr:/app/bumparr:ro
     restart: unless-stopped
+
+volumes:
+  bumparr-assets:
+  bumparr-data:

@@ -1,0 +1,36 @@
+# Dayparts — the station's time-of-day character.
+#
+# A real channel is programmed, not shuffled: overnight is windows and dead
+# air, mornings are the weather and the time, evenings are trivia. A window
+# here names a block of the local day (TZ) and says which kinds belong to it.
+#
+#   hours        "HH:MM-HH:MM", 24-hour, local time. A window may wrap
+#                midnight ("22:00-06:00"). Half-open: 06:00 belongs to the
+#                window that STARTS at 06:00.
+#   kinds        {kind: multiplier}. Stacks with season and the play-history
+#                factors at selection time; a kind not listed is 1.0. Nothing
+#                is written to the database.
+#   description  becomes the guide programme text for the block, so write it
+#                for a viewer reading an EPG, not for yourself.
+#
+# Windows must not overlap; if they do the whole file is ignored (logged) so
+# a typo cannot silently reorder your day. Hours with no window play the
+# full rotation and appear in the guide as a plain brand-titled block.
+#
+# THESE ARE SUGGESTIONS. Edit freely: your hours, your channel.
+dayparts:
+  overnight:
+    hours: "00:00-06:00"
+    description: "Windows, dead air, and the occasional unexplained number."
+    kinds: {window: 2.0, dead_air: 2.0, number: 1.5, trivia: 0.4, psa: 0.5}
+  morning:
+    hours: "06:00-10:00"
+    description: "Weather, the time, and the day's on-this-day."
+    kinds: {weather: 3.0, local_time: 2.5, on_this_day: 2.0, dead_air: 0.2}
+  daytime:
+    hours: "10:00-18:00"
+    description: "The full rotation."
+  evening:
+    hours: "18:00-24:00"
+    description: "Trivia, tiny games, and the odd correction."
+    kinds: {trivia: 2.0, tiny_games: 2.0, corrections: 1.5, dead_air: 0.3}

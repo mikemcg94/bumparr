@@ -24,12 +24,14 @@ some of the time — leaving a deliberate share silent, because unbroken wall-to
 wall music is worse than the occasional held breath.
 """
 import argparse
+import hashlib
 import json
 import os
 import random
-import shutil
 import subprocess
+import tempfile
 import time
+import uuid
 from pathlib import Path
 
 from bumparr import brandslam, config, db
@@ -55,22 +57,23 @@ VIDEO_EXT = (".mp4", ".mkv", ".webm", ".m4v", ".mov", ".avi")
 # precisely because it keeps changing, and each capture replaces the last. Cutting
 # permanent clips from one would freeze a moment that was meant to expire, and
 # those clips would then accumulate forever while the live view moved on.
-EPHEMERAL_DIRS = set(
+EPHEMERAL_DIRS = {
     d.strip() for d in config.env("EPHEMERAL_DIRS", "windows").split(",")
-    if d.strip())
+    if d.strip()}
 
 # Directories holding Bumparr's OWN FINISHED OUTPUT. These are not source
 # material and must never be quarried: a rendered text card is a completed
 # bumper, and cutting windows out of one produces fragments of a card that was
 # already exactly the right length. The output tree is excluded separately by
 # path, but rendered cards live beside the sources rather than under it.
-OUTPUT_DIRS = set(
+OUTPUT_DIRS = {
     d.strip() for d in config.env("OUTPUT_DIRS", "cards,bumpers").split(",")
-    if d.strip())
+    if d.strip()}
 
 
 # ------------------------------------------------------------------ probing --
 def duration_of(path):
+    """Duration of a media file in seconds; 0.0 if unreadable."""
     out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                           "-of", "csv=p=0", str(path)], capture_output=True, text=True)
     try:
@@ -80,6 +83,7 @@ def duration_of(path):
 
 
 def dimensions_of(path):
+    """(width, height) of the first video stream; (0, 0) if unreadable."""
     out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                           "-show_entries", "stream=width,height", "-of", "csv=p=0",
                           str(path)], capture_output=True, text=True)
@@ -190,15 +194,32 @@ def clips_for_duration(src_duration):
 
 # ------------------------------------------------------------------ audio ----
 def sound_pool():
+    """All music beds the deployer has mounted under SOUNDS, sorted for stable rolls.
+
+    An empty pool is normal and fine: silent clips stay silent (see the
+    NOTE printed in run()), which is a deliberate share of the output.
+    """
     d = Path(config.SOUND_DIR)
     if not d.is_dir():
         return []
     return [f for f in sorted(d.rglob("*")) if f.suffix.lower() in SOUND_EXT]
 
 
-def _escape(p):
+def _escape_filter_value(p):
     """Escape a path for use inside an ffmpeg filter argument."""
-    return str(p).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+    return str(p).replace("\\", "/").replace(":", "\\:").replace("'", "\\'").replace(
+        ";", "\\;").replace(",", "\\,").replace("[", "\\[").replace("]", "\\]")
+
+
+def _brand_textfile(brand):
+    """Stable UTF-8 textfile avoids drawtext's multi-level text escaping."""
+    text = str(brand).replace("\n", " ").replace("\r", " ")
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    path = Path(tempfile.gettempdir()) / ("bumparr-brand-%d-%s.txt" %
+                                          (os.getpid(), digest))
+    if not path.is_file():
+        path.write_text(text, encoding="utf-8")
+    return path
 
 
 # ------------------------------------------------------------- the slam ------
@@ -214,12 +235,21 @@ def _drawtext_chain(brand, spec, static_face, duration):
     slam_at, flicker = sp["start"], sp["flicker"]
     base_px = int(13.0 * (min(W, H) / 100.0))
     safe_w = int(W * 0.82)          # keep the mark inside the title-safe area
+    brand_file = _brand_textfile(brand)
 
     def entry(face, enable):
+        """One timed drawtext: this face, shown only while `enable` is true."""
         size = brandslam.fit_size(face, brand, safe_w, base_px)
-        return ("drawtext=fontfile='%s':text='%s':x=(w-text_w)/2:y=(h-text_h)/2"
+        return ("drawtext=fontfile='%s':textfile='%s':x=(w-text_w)/2:y=(h-text_h)/2"
                 ":fontsize=%d:fontcolor=white:shadowcolor=black@0.6:shadowx=3:shadowy=3"
-                ":enable='%s'" % (_escape(face), brand, size, enable))
+                # textfile avoids filter-parser injection, while expansion=none
+                # is still required to stop drawtext treating '%' in that file
+                # as a runtime expansion sequence. Escape expression commas as
+                # an extra filtergraph boundary even when earlier quoted paths
+                # contain apostrophes.
+                ":expansion=none:enable='%s'" % (_escape_filter_value(face),
+                                                   _escape_filter_value(brand_file),
+                                                   size, enable.replace(",", "\\,")))
 
     parts = []
     if spec is None:
@@ -387,20 +417,28 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
 
         spec = brandslam.roll(rng, pool)
         static = brandslam.static_face(rng, pool)
-        stem = "%s_%s_%d" % (kind, src.stem[:38].replace(" ", "_"), i)
+        identity = "%s:%s:%s" % (src_rel, start, length)
+        tag = "%s_%s" % (hashlib.sha1(identity.encode()).hexdigest()[:8],
+                           uuid.uuid4().hex[:8])
+        stem = "%s_%s_%d_%s" % (kind, src.stem[:38].replace(" ", "_"), i, tag)
         name = "%s/%s.mp4" % (kind, stem)
         dest = Path(config.OUTPUT_DIR) / name
         try:
             cut_clip(src, dest, start, length, config.BRAND, spec, static,
                      bed=bed, native=has_native)
         except Exception as e:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
             print("    FAIL %-42s %s" % (stem, str(e)[:120]))
             continue
         actual = duration_of(dest)
         audio = ("native" if has_native else
                  ("bed:" + Path(bed["path"]).stem[:18] if bed else "silent"))
-        with db.conn() as c:
-            c.execute(
+        try:
+            with db.conn() as c:
+                cursor = c.execute(
                 """INSERT OR IGNORE INTO playables
                    (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,created_at)
                    VALUES (?,?,?,?,?,?,?,?,'',?,1,'ok',?)""",
@@ -424,7 +462,14 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
                              # compounding whatever was current at mint time.
                              "base_weight": weight}),
                  weight, time.time()))
-            c.commit()
+                if not cursor.rowcount:
+                    raise RuntimeError("clip registration was not inserted")
+        except Exception:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+            raise
         made.append((name, actual, audio, spec is not None))
         print("    ok  %-44s %5.2fs  %-22s %s"
               % (stem[:44], actual, audio, brandslam.describe(spec)))
@@ -439,6 +484,16 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
 
 
 def run(category=None, limit=None, delete_source=False, seed=None, per_source=None):
+    """Quarry every source video in VIDEO_DIR into finished, branded bumpers.
+
+    Walks the source tree (skipping Bumparr's own output and ephemeral
+    live-capture dirs), plans overlapping windows per source, and registers
+    each cut clip with its provenance in the payload. One bad source is
+    skipped, never fatal — a batch over hundreds of files must survive a
+    locked DB, a corrupt clip, or a codec ffmpeg dislikes (see the per-source
+    guard in the loop below). Returns the list of (name, duration, audio,
+    rolling) tuples made.
+    """
     rng = random.Random(seed)
     pool = brandslam.font_pool()
     sounds = sound_pool()

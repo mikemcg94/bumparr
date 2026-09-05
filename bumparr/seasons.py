@@ -26,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-from bumparr import config, db
+from bumparr import db
 
 SEASONS_FILE = Path(__file__).resolve().parent / "config_files" / "seasons.yaml"
 
@@ -39,8 +39,10 @@ DEFAULT_PEAK_BOOST = 1.5
 
 
 def load_seasons(path=SEASONS_FILE):
+    """The {kind: season-spec} map from seasons.yaml; {} on any read error,
+    which degrades the pool to unseasoned rather than failing selection."""
     try:
-        doc = yaml.safe_load(Path(path).read_text()) or {}
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     except Exception as e:
         print("[seasons] could not read %s: %s" % (path, e))
         return {}
@@ -51,8 +53,14 @@ def _doy(md, year):
     """MM-DD -> day-of-year for a given year, tolerating 02-29 on common years."""
     try:
         m, d = [int(x) for x in str(md).split("-")]
-        return datetime.date(year, m, min(d, 28) if (m == 2 and d == 29) else d).timetuple().tm_yday
-    except Exception:
+        try:
+            date = datetime.date(year, m, d)
+        except ValueError:
+            if (m, d) != (2, 29):
+                raise
+            date = datetime.date(year, 2, 28)
+        return date.timetuple().tm_yday
+    except (TypeError, ValueError):
         return None
 
 
@@ -171,7 +179,8 @@ def restore_base_weights():
 
 
 def apply(today=None, dry_run=False):
-    """Recompute every gated category's weight for the current date."""
+    """Recompute every gated category's weight for the current date. Report-only
+    when dry_run is True (the CLI default; pass --apply to write)."""
     seasons = load_seasons()
     if not seasons:
         return {"gated": 0, "changed": 0}
@@ -240,7 +249,8 @@ def preview(kind, spec=None):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Apply seasonal weighting to the pool.")
-    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--apply", action="store_true",
+                    help="perform the in-place weight write (default is report-only)")
     ap.add_argument("--preview", action="store_true", help="show each curve across the year")
     ap.add_argument("--date", help="pretend it is this date (YYYY-MM-DD)")
     a = ap.parse_args()
@@ -250,4 +260,4 @@ if __name__ == "__main__":
             preview(k)
     else:
         d = datetime.date.fromisoformat(a.date) if a.date else None
-        print(apply(today=d, dry_run=a.dry_run))
+        print(apply(today=d, dry_run=not a.apply))
